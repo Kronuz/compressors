@@ -22,10 +22,18 @@
 
 #pragma once
 
-// Buffer-core LZ4 compressor. Extracted from Xapiand; the fd-streaming
-// LZ4CompressFile / LZ4DecompressFile classes (which pulled in io.hh and thus
-// Xapiand's opts.h) stayed in Xapiand. What is left is the CRTP block streaming
-// base and the in-memory *Data classes plus the compress/decompress helpers.
+// Buffer-core LZ4 compressor. Extracted from Xapiand. Both the in-memory *Data
+// classes and the fd-streaming LZ4CompressFile / LZ4DecompressFile classes are
+// included here. The *File classes no longer depend on Xapiand's io.hh /
+// opts.h: they use the library's own EINTR-safe open/close/read/lseek helpers
+// in compressors::detail (compressor_io.h).
+//
+// Each *File class has two constructors: open-by-filename (the class owns the
+// fd and closes it) and adopt-an-fd (fd_internal=false, the caller keeps
+// ownership and the class never closes it). The adopt-an-fd ctor is the seam
+// for a consumer that wants to supply its own instrumented I/O: open the fd
+// however you like, hand it in, and the *File class reads from it without
+// taking ownership.
 //
 // The LZ4 buffer format is a sequence of [uint16_t block length][LZ4 block]
 // records using the ring-buffer streaming API (LZ4_compress_fast_continue /
@@ -35,14 +43,20 @@
 
 #include <cstdint>          // for uint16_t, uint32_t
 #include <cstring>          // for size_t, memcpy
+#include <functional>      // for std::function
 #include <iterator>         // for std::input_iterator_tag
 #include <memory>           // for std::unique_ptr
 #include <string>           // for string
 #include <string_view>     // for std::string_view
 
+#include <fcntl.h>          // for O_RDONLY
+#include <sys/types.h>      // for off_t, ssize_t
+
+#include "compressor_io.h"  // for compressors::detail open/close/read/lseek
 #include "lz4.h"            // for LZ4_COMPRESSBOUND, LZ4_resetStream, LZ4_stre...
 #include "xxhash.h"         // for XXH32_createState, XXH32_reset, XXH32_digest
 #include "exception.h"      // for Error, THROW
+#include "likely.h"         // for likely, unlikely
 
 
 constexpr size_t LZ4_BLOCK_SIZE        = 1024 * 2;
@@ -265,6 +279,154 @@ public:
 	void reset(const char* data_, size_t data_size_, int seed=0) {
 		_reset(seed);
 		add_data(data_, data_size_);
+	}
+};
+
+
+class LZ4File {
+protected:
+	int fd;
+	off_t fd_offset;
+	off_t fd_nbytes;
+	bool fd_internal;
+
+	const size_t block_size;
+
+	std::function<size_t()> get_read_size;
+
+	LZ4File(size_t block_size_, std::string_view filename)
+		: fd(-1),
+		  fd_offset(0),
+		  fd_nbytes(-1),
+		  fd_internal(false),
+		  block_size(block_size_)
+	{
+		open(filename);
+	}
+
+	LZ4File(size_t block_size_, int fd_, off_t fd_offset_, off_t fd_nbytes_)
+		: fd(-1),
+		  fd_offset(0),
+		  fd_nbytes(-1),
+		  fd_internal(false),
+		  block_size(block_size_)
+	{
+		add_fildes(fd_, fd_offset_, fd_nbytes_);
+	}
+
+	~LZ4File() {
+		close();
+	}
+
+public:
+	int close() {
+		int ret = 0;
+		if (fd_internal && fd != -1) {
+			ret = compressors::detail::close(fd);
+		}
+		fd = -1;
+		fd_offset = 0;
+		fd_nbytes = -1;
+		fd_internal = false;
+		return ret;
+	}
+
+	void open(std::string_view filename) {
+		std::string filename_string(filename);
+		fd = compressors::detail::open(filename_string.c_str(), O_RDONLY);
+		if unlikely(fd == -1) {
+			THROW(LZ4IOError, "Cannot open file: {}", filename_string);
+		}
+		fd_offset = 0;
+		fd_internal = true;
+		fd_nbytes = -1;
+		get_read_size = [this]() { return block_size; };
+	}
+
+	void add_fildes(int fd_, size_t fd_offset_, size_t fd_nbytes_) {
+		fd = fd_;
+		fd_offset = fd_offset_;
+		fd_nbytes = fd_nbytes_;
+		fd_internal = false;
+		if (fd_nbytes == -1) {
+			get_read_size = [this]() { return block_size; };
+		} else {
+			get_read_size = [this]() {
+				size_t size = fd_nbytes > static_cast<off_t>(block_size) ? block_size : fd_nbytes;
+				fd_nbytes -= size;
+				return size;
+			};
+		}
+	}
+
+	void add_file(std::string_view filename) {
+		open(filename);
+	}
+};
+
+
+/*
+ * Compress a file.
+ */
+class LZ4CompressFile : public LZ4File, public LZ4BlockStreaming<LZ4CompressFile> {
+	LZ4_stream_t* const lz4Stream;
+
+	std::string init();
+	std::string next();
+
+	friend class LZ4BlockStreaming<LZ4CompressFile>;
+
+public:
+	LZ4CompressFile(std::string_view filename, int seed=0);
+
+	LZ4CompressFile(int fd_=0, off_t fd_offset_=-1, off_t fd_nbytes_=-1, int seed=0);
+
+	~LZ4CompressFile();
+
+	void reset(int fd_, size_t fd_offset_, size_t fd_nbytes_, int seed=0) {
+		_reset(seed);
+		add_fildes(fd_, fd_offset_, fd_nbytes_);
+		LZ4_resetStream(lz4Stream);
+	}
+
+	void reset(std::string_view filename, int seed=0) {
+		_reset(seed);
+		open(filename);
+		LZ4_resetStream(lz4Stream);
+	}
+};
+
+
+/*
+ * Decompress a file.
+ */
+class LZ4DecompressFile : public LZ4File, public LZ4BlockStreaming<LZ4DecompressFile> {
+	LZ4_streamDecode_t* const lz4StreamDecode;
+
+	char* const data;
+	ssize_t data_size;
+	size_t data_offset;
+
+	std::string init();
+	std::string next();
+
+	friend class LZ4BlockStreaming<LZ4DecompressFile>;
+
+public:
+	LZ4DecompressFile(std::string_view filename, int seed=0);
+
+	LZ4DecompressFile(int fd_=0, off_t fd_offset_=-1, off_t fd_nbytes_=-1, int seed=0);
+
+	~LZ4DecompressFile();
+
+	void reset(int fd_, size_t fd_offset_, size_t fd_nbytes_, int seed=0) {
+		_reset(seed);
+		add_fildes(fd_, fd_offset_, fd_nbytes_);
+	}
+
+	void reset(std::string_view filename, int seed=0) {
+		_reset(seed);
+		open(filename);
 	}
 };
 

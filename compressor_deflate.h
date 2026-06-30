@@ -22,11 +22,18 @@
 
 #pragma once
 
-// Buffer-core deflate (zlib) compressor. Extracted from Xapiand; the fd-streaming
-// DeflateCompressFile / DeflateDecompressFile classes (which pulled in io.hh and
-// thus Xapiand's opts.h) stayed in Xapiand. What is left is the CRTP block
-// streaming base and the in-memory *Data classes plus the compress/decompress
-// convenience helpers.
+// Buffer-core deflate (zlib) compressor. Extracted from Xapiand. Both the
+// in-memory *Data classes and the fd-streaming DeflateCompressFile /
+// DeflateDecompressFile classes are included here. The *File classes no longer
+// depend on Xapiand's io.hh / opts.h: they use the library's own EINTR-safe
+// open/close/read/lseek helpers in the compressors::detail namespace below.
+//
+// Each *File class has two constructors: open-by-filename (the class owns the
+// fd and closes it) and adopt-an-fd (fd_internal=false, the caller keeps
+// ownership and the class never closes it). The adopt-an-fd ctor is the seam
+// for a consumer that wants to supply its own instrumented I/O: open the fd
+// however you like, hand it in, and the *File class reads from it without
+// taking ownership.
 
 #include <cstdint>               // for uint8_t
 #include <cstring>               // for memcpy
@@ -37,7 +44,12 @@
 #include <vector>                // for std::vector
 #include <zlib.h>                // for z_stream
 
+#include <fcntl.h>               // for O_RDONLY
+#include <sys/types.h>           // for off_t
+
+#include "compressor_io.h"       // for compressors::detail open/close/read/lseek
 #include "exception.h"           // for Error, THROW
+#include "likely.h"              // for likely, unlikely
 
 
 #define DEFLATE_BLOCK_SIZE 16384
@@ -244,6 +256,141 @@ public:
 		stream = 0;
 		data_offset = 0;
 		add_data(data_, data_size_);
+	}
+};
+
+
+class DeflateFile {
+protected:
+	int fd;
+	off_t fd_offset;
+	off_t fd_nbytes;
+	bool fd_internal;
+
+	size_t bytes_readed;
+	size_t size_file;
+
+	explicit DeflateFile(std::string_view filename)
+		: fd(-1),
+		  fd_offset(0),
+		  fd_nbytes(-1),
+		  fd_internal(false),
+		  bytes_readed(0),
+		  size_file(0)
+	{
+		open(filename);
+	}
+
+	DeflateFile(int fd_, off_t fd_offset_, off_t fd_nbytes_)
+		: fd(-1),
+		  fd_offset(0),
+		  fd_nbytes(-1),
+		  fd_internal(false),
+		  bytes_readed(0),
+		  size_file(0)
+	{
+		add_fildes(fd_, fd_offset_, fd_nbytes_);
+	}
+
+	~DeflateFile() {
+		close();
+	}
+
+public:
+	int close() {
+		int ret = 0;
+		if (fd_internal && fd != -1) {
+			ret = compressors::detail::close(fd);
+		}
+		fd = -1;
+		fd_offset = 0;
+		fd_nbytes = -1;
+		fd_internal = false;
+		bytes_readed = 0;
+		size_file = 0;
+		return ret;
+	}
+
+	void open(std::string_view filename) {
+		std::string filename_string(filename);
+		fd = compressors::detail::open(filename_string.c_str(), O_RDONLY);
+		if unlikely(fd == -1) {
+			THROW(DeflateIOError, "Cannot open file: {}", filename_string);
+		}
+		fd_offset = 0;
+		fd_nbytes = -1;
+		fd_internal = true;
+	}
+
+	void add_fildes(int fd_, size_t fd_offset_, size_t fd_nbytes_) {
+		fd = fd_;
+		fd_offset = fd_offset_;
+		fd_nbytes = fd_nbytes_;
+		fd_internal = false;
+	}
+
+	void add_file(std::string_view filename) {
+		open(filename);
+	}
+};
+
+
+/*
+ * Compress a file.
+ */
+class DeflateCompressFile : public DeflateFile, public DeflateBlockStreaming<DeflateCompressFile> {
+	std::string init();
+	std::string next();
+
+	friend class DeflateBlockStreaming<DeflateCompressFile>;
+
+public:
+	DeflateCompressFile(std::string_view filename, bool gzip_=false);
+
+	DeflateCompressFile(int fd_=0, off_t fd_offset_=-1, off_t fd_nbytes_=-1, bool gzip_=false);
+
+	~DeflateCompressFile();
+
+	void reset(int fd_, size_t fd_offset_, size_t fd_nbytes_, bool gzip_=false) {
+		gzip = gzip_;
+		stream = 0;
+		add_fildes(fd_, fd_offset_, fd_nbytes_);
+	}
+
+	void reset(std::string_view filename, bool gzip_=false) {
+		gzip = gzip_;
+		stream = 0;
+		open(filename);
+	}
+};
+
+
+/*
+ * Decompress a file.
+ */
+class DeflateDecompressFile : public DeflateFile, public DeflateBlockStreaming<DeflateDecompressFile> {
+	std::string init();
+	std::string next();
+
+	friend class DeflateBlockStreaming<DeflateDecompressFile>;
+
+public:
+	DeflateDecompressFile(std::string_view filename, bool gzip_=false);
+
+	DeflateDecompressFile(int fd_=0, off_t fd_offset_=-1, off_t fd_nbytes_=-1, bool gzip_=false);
+
+	~DeflateDecompressFile();
+
+	void reset(int fd_, size_t fd_offset_, size_t fd_nbytes_, bool gzip_=false) {
+		gzip = gzip_;
+		stream = 0;
+		add_fildes(fd_, fd_offset_, fd_nbytes_);
+	 }
+
+	void reset(std::string_view filename, bool gzip_=false) {
+		gzip = gzip_;
+		stream = 0;
+		open(filename);
 	}
 };
 
