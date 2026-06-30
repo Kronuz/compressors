@@ -55,7 +55,12 @@
 #include "compressor_io.h"  // for compressors::detail open/close/read/lseek
 #include "lz4.h"            // for LZ4_COMPRESSBOUND, LZ4_resetStream, LZ4_stre...
 #include "xxhash.h"         // for XXH32_createState, XXH32_reset, XXH32_digest
-#include "exception.h"      // for Error, THROW
+// See compressor_deflate.h: COMPRESSORS_EXCEPTION_HEADER lets a host redirect
+// Error/THROW to its own exception header to avoid redefinition when embedding.
+#ifndef COMPRESSORS_EXCEPTION_HEADER
+#define COMPRESSORS_EXCEPTION_HEADER "exception.h"
+#endif
+#include COMPRESSORS_EXCEPTION_HEADER  // for Error, THROW
 #include "likely.h"         // for likely, unlikely
 
 

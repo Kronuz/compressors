@@ -48,7 +48,14 @@
 #include <sys/types.h>           // for off_t
 
 #include "compressor_io.h"       // for compressors::detail open/close/read/lseek
-#include "exception.h"           // for Error, THROW
+// Error / THROW come from this library's own exception.h by default, but a host
+// embedding the library can redirect to its own exception header (matching THROW's
+// (func, file, line, name, ...) signature) by defining COMPRESSORS_EXCEPTION_HEADER,
+// so its Error/THROW are not redefined. Same trick as the located-exception sibling.
+#ifndef COMPRESSORS_EXCEPTION_HEADER
+#define COMPRESSORS_EXCEPTION_HEADER "exception.h"
+#endif
+#include COMPRESSORS_EXCEPTION_HEADER  // for Error, THROW
 #include "likely.h"              // for likely, unlikely
 
 

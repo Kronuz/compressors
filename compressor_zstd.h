@@ -45,7 +45,12 @@
 
 #include <zstd.h>           // for ZSTD_compress, ZSTD_decompress, ZSTD_compressBound
 
-#include "exception.h"      // for Error, THROW
+// See compressor_deflate.h: COMPRESSORS_EXCEPTION_HEADER lets a host redirect
+// Error/THROW to its own exception header to avoid redefinition when embedding.
+#ifndef COMPRESSORS_EXCEPTION_HEADER
+#define COMPRESSORS_EXCEPTION_HEADER "exception.h"
+#endif
+#include COMPRESSORS_EXCEPTION_HEADER  // for Error, THROW
 
 
 // Default compression level. ZSTD_CLEVEL_DEFAULT is 3 upstream; spelled out so
