@@ -110,7 +110,7 @@ LZ4CompressData::next()
 		_offset = 0;
 	}
 
-	XXH32_update(&xxh_state, inpPtr, inpBytes);
+	compressors::XXH32_update(&xxh_state, inpPtr, inpBytes);
 	size_t totalBytes = sizeof(uint16_t) + cmpBytes;
 	_size += totalBytes;
 
@@ -187,7 +187,7 @@ LZ4DecompressData::next()
 		_offset = 0;
 	}
 
-	XXH32_update(&xxh_state, decPtr, decBytes);
+	compressors::XXH32_update(&xxh_state, decPtr, decBytes);
 	_size += decBytes;
 
 	std::string result;
@@ -257,7 +257,7 @@ LZ4CompressFile::next()
 		_offset = 0;
 	}
 
-	XXH32_update(&xxh_state, inpPtr, inpBytes);
+	compressors::XXH32_update(&xxh_state, inpPtr, inpBytes);
 	size_t totalBytes = sizeof(uint16_t) + cmpBytes;
 	_size += totalBytes;
 
@@ -373,7 +373,7 @@ LZ4DecompressFile::next()
 		_offset = 0;
 	}
 
-	XXH32_update(&xxh_state, decPtr, decBytes);
+	compressors::XXH32_update(&xxh_state, decPtr, decBytes);
 	_size += decBytes;
 
 	std::string result;

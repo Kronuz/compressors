@@ -54,7 +54,7 @@
 
 #include "compressor_io.h"  // for compressors::detail open/close/read/lseek
 #include "lz4.h"            // for LZ4_COMPRESSBOUND, LZ4_resetStream, LZ4_stre...
-#include "xxhash.h"         // for XXH32_createState, XXH32_reset, XXH32_digest
+#include "xxh32_stream.h"         // for XXH32_createState, XXH32_reset, XXH32_digest
 // See compressor_deflate.h: COMPRESSORS_EXCEPTION_HEADER lets a host redirect
 // Error/THROW to its own exception header to avoid redefinition when embedding.
 #ifndef COMPRESSORS_EXCEPTION_HEADER
@@ -103,7 +103,7 @@ protected:
 	std::unique_ptr<char[]> cmpBuf;
 	std::unique_ptr<char[]> buffer;
 
-	XXH32_state_t xxh_state;
+	compressors::XXH32_state_t xxh_state;
 
 	std::string _init() {
 		return static_cast<Impl*>(this)->init();
@@ -116,7 +116,7 @@ protected:
 	void _reset(int seed) {
 		_size = 0;
 		_offset = 0;
-		XXH32_reset(&xxh_state, seed);
+		compressors::XXH32_reset(&xxh_state, seed);
 	}
 
 public:
@@ -124,7 +124,7 @@ public:
 		: _size(0),
 		  _offset(0)
 	{
-		XXH32_reset(&xxh_state, seed);
+		compressors::XXH32_reset(&xxh_state, seed);
 	}
 
 	class iterator {
@@ -210,7 +210,7 @@ public:
 	}
 
 	uint32_t get_digest() {
-		return XXH32_digest(&xxh_state);
+		return compressors::XXH32_digest(&xxh_state);
 	}
 };
 

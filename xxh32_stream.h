@@ -82,6 +82,11 @@ inline uint32_t round(uint32_t acc, uint32_t input) noexcept {
 } // namespace compressors_xxhash_detail
 
 
+// In a namespace so these never collide with a real xxHash (XXH32_state_t/
+// XXH32_reset/...) the host may also have on its include path (e.g. lz4's xxhash.h
+// pulled in by the hashes sibling). Renamed off "xxhash.h" for the same reason.
+namespace compressors {
+
 struct XXH32_state_t {
 	uint32_t total_len;
 	uint32_t large_len;       // non-zero once total_len >= 16
@@ -197,3 +202,5 @@ inline uint32_t XXH32_digest(const XXH32_state_t* state) noexcept {
 	h32 ^= h32 >> 16;
 	return h32;
 }
+
+}  // namespace compressors
