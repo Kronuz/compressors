@@ -102,4 +102,11 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_executable(compressors_test test/test.cc)
   target_link_libraries(compressors_test PRIVATE compressors)
   add_test(NAME compressors COMMAND compressors_test)
+
+  # A realistic usage example that mirrors Xapiand's one-shot helpers, block
+  # streaming classes, and LZ4-default codec dispatch. It self-checks and is
+  # ALSO registered as a ctest test.
+  add_executable(compressors_roundtrip examples/roundtrip.cc)
+  target_link_libraries(compressors_roundtrip PRIVATE compressors)
+  add_test(NAME compressors_roundtrip COMMAND compressors_roundtrip)
 endif()

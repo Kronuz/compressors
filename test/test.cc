@@ -11,6 +11,7 @@
 // Build: c++ -std=c++20 -I.. test.cc ../compressor_*.cc -llz4 -lz -lzstd -o test && ./test
 
 #include <cassert>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -98,11 +99,17 @@ static void test_backend(const char* name, Compress compress, Decompress decompr
 }
 
 
-// Write bytes to a fresh unique temp file and return its path. The caller is
-// responsible for unlinking it.
+// Write bytes to a fresh unique local file and return its path. The caller is
+// responsible for unlinking it. ctest runs from the build tree, so this keeps
+// scratch files under the build directory instead of using a system temp dir.
 static std::string write_temp_file(const std::string& bytes) {
-	char path[] = "/tmp/compressors_test_XXXXXX";
-	int fd = ::mkstemp(path);
+	static unsigned counter = 0;
+	std::string path;
+	int fd = -1;
+	do {
+		path = "compressors_test_" + std::to_string(static_cast<long long>(::getpid())) + "_" + std::to_string(counter++);
+		fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+	} while (fd == -1 && errno == EEXIST);
 	assert(fd != -1);
 	size_t off = 0;
 	while (off < bytes.size()) {
@@ -111,7 +118,7 @@ static std::string write_temp_file(const std::string& bytes) {
 		off += static_cast<size_t>(w);
 	}
 	::close(fd);
-	return std::string(path);
+	return path;
 }
 
 

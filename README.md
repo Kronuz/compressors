@@ -126,11 +126,16 @@ cmake --build build
 ctest --test-dir build
 ```
 
-`ctest` runs one test, `compressors` (`test/test.cc`): it round-trips a spread of
+`ctest` runs two tests. `compressors` (`test/test.cc`) round-trips a spread of
 buffers (empty, one byte, a string, a buffer straddling the lz4 block boundary,
 a highly repetitive run, a repeated phrase, and incompressible random bytes)
 through each backend, asserts `decompress(compress(x)) == x`, and sanity-checks
-the compressed size. It ends with `all compressors tests passed`.
+the compressed size.
+
+`compressors_roundtrip` (`examples/roundtrip.cc`) is the runnable example. It
+mirrors Xapiand and storage usage: LZ4-default codec dispatch, the zstd and
+deflate selectors, one-shot helpers, block streaming classes, edge inputs, and
+cross-API round-trips.
 
 ## Provenance
 
