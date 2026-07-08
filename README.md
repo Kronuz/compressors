@@ -1,7 +1,8 @@
 # compressors
 
-In-memory buffer compression with three interchangeable backends: **deflate**
-(zlib), **lz4**, and **zstd** (Zstandard). A small static C++20 library.
+Compression with three interchangeable backends: **deflate** (zlib), **lz4**, and
+**zstd** (Zstandard). A small static C++20 library. Each backend compresses an
+in-memory buffer; deflate and lz4 also stream to and from file descriptors.
 
 ## What it is
 
@@ -11,6 +12,11 @@ one shape: a CRTP block-streaming base (`*BlockStreaming<Derived>`), a
 free-function helpers (`compress_<backend>` / `decompress_<backend>`) that take a
 `std::string_view` and return a `std::string`. Because the three backends share
 that shape, you can swap one for another by changing the function name.
+
+The deflate and lz4 backends also ship fd-streaming `*CompressFile` /
+`*DecompressFile` classes that read and write file descriptors directly, using the
+library's own EINTR-safe IO helpers (`compressor_io.h`) rather than any external
+IO layer; zstd is buffer-only.
 
 ```cpp
 #include "compressor_deflate.h"
@@ -144,14 +150,14 @@ deflate and lz4 buffer compressors (`compressor_deflate.{h,cc}`,
 `compressor_lz4.{h,cc}`). The **Zstandard backend is new**, written here to
 mirror the deflate/lz4 buffer-core so the three are interchangeable.
 
-Xapiand's compressors had two families sharing each CRTP base: a **buffer-core**
-(`*Data` classes, in-memory) and an **fd-streaming** layer (`*File` classes that
-streamed to and from file descriptors via Xapiand's `io.hh`, which pulled in
-`opts.h`). Only the buffer-core was reusable; the fd-streaming layer was app
-glue. So the extraction kept the CRTP base and the `*Data` classes and **dropped
-the `*File` classes**, which stay in Xapiand. See [ARCHITECTURE.md](ARCHITECTURE.md)
-for the split and the decoupling notes, and [AGENTS.md](AGENTS.md) for the repo
-map and conventions.
+Each CRTP base backs two families: a **buffer-core** (`*Data` classes, in-memory)
+and an **fd-streaming** layer (`*CompressFile` / `*DecompressFile`) that reads and
+writes file descriptors. In Xapiand the fd-streaming layer went through `io.hh`,
+which pulled in `opts.h` and the rest of the app; here it was decoupled onto the
+library's own EINTR-safe helpers in `compressor_io.h`, so both families ship
+standalone for deflate and lz4 (zstd is buffer-only). See
+[ARCHITECTURE.md](ARCHITECTURE.md) for the split and the decoupling notes, and
+[AGENTS.md](AGENTS.md) for the repo map and conventions.
 
 ## License
 

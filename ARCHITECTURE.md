@@ -62,20 +62,18 @@ In Xapiand each header carried **two** leaf families on the same CRTP base:
   `<Backend>DecompressData`. These compress/decompress an in-memory buffer. They
   depend only on the compression library, a couple of small std-only utils, and
   the exception base. This is the reusable part.
-- **fd-streaming**: `<Backend>File`, `<Backend>CompressFile`,
-  `<Backend>DecompressFile`. These stream to and from file descriptors. They
-  included `io.hh`, which pulled in Xapiand's `opts.h` and the rest of the app.
-  This is app glue, not a general-purpose library.
+- **fd-streaming**: `<Backend>CompressFile`, `<Backend>DecompressFile`. These
+  stream to and from file descriptors. In Xapiand they included `io.hh` (which
+  pulled in `opts.h` and the rest of the app); here they use the library's own
+  EINTR-safe helpers in `compressor_io.h` instead, so they carry no external
+  dependency.
 
-The extraction kept the buffer-core and **dropped the fd-streaming layer
-entirely**. The CRTP base is shared, so it came along; the `*File` classes, the
-`#include "io.hh"`, the `<fcntl.h>` / `<sys/stat.h>` includes, and the
-`stringified.hh` include (used only by the `*File::open` path) were all removed.
-The fd-streaming classes stay in Xapiand, where the `io::` layer lives.
-
-One consequence worth noting: `stringified.hh` was *only* used by the dropped
-`*File` classes (for null-terminating a filename before `io::open`). The
-buffer-core never touches it, so it was not vendored.
+Both families ship here for deflate and lz4 (zstd is buffer-only). The fd-streaming
+classes were decoupled from Xapiand: the `#include "io.hh"` was replaced by the
+library's own `compressor_io.h` (the `compressors::detail` open/close/read/lseek
+helpers), and they take a plain `std::string` / fd rather than Xapiand's IO types.
+`test/test.cc` round-trips a `*CompressFile` / `*DecompressFile` pair on disk,
+including the path that adopts a caller-owned fd.
 
 ## Per-backend specifics
 
@@ -97,9 +95,7 @@ carry across 2 KB blocks. Each emitted block is `[uint16 compressed length][LZ4
 bytes]`, which the decompressor reads back to size each block. The leaf owns an
 `LZ4_stream_t` / `LZ4_streamDecode_t`. A running XXH32 digest is maintained over
 the bytes and exposed via `get_digest()`; it is **auxiliary** — not embedded in
-the stream, not needed for a round-trip. The `read_partial_*` helpers and the
-mid-block-boundary handling from Xapiand belonged to the `*File` path and were
-dropped; the buffer-core only needs `read_uint16` and `read_bin`.
+the stream, not needed for a round-trip.
 
 ### zstd (`compressor_zstd.cc`) — the new backend
 

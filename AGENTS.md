@@ -8,13 +8,14 @@ the invariants you must not break, and the traps.
 ## Repo map
 
 ```
-compressor_deflate.h / .cc    Deflate (zlib) buffer-core: CRTP base + Deflate{Data,CompressData,DecompressData} + compress/decompress_deflate.
-compressor_lz4.h / .cc        LZ4 buffer-core: CRTP base + LZ4{Data,CompressData,DecompressData} + compress/decompress_lz4. Uses xxhash.h for the auxiliary digest.
-compressor_zstd.h / .cc       Zstd buffer-core (the new backend): CRTP base + Zstd{Data,CompressData,DecompressData} + compress/decompress_zstd.
+compressor_deflate.h / .cc    Deflate (zlib): CRTP base + Deflate{Data,CompressData,DecompressData} (buffer) + Deflate{Compress,Decompress}File (fd-streaming) + compress/decompress_deflate.
+compressor_lz4.h / .cc        LZ4: CRTP base + LZ4{Data,CompressData,DecompressData} (buffer) + LZ4{Compress,Decompress}File (fd-streaming) + compress/decompress_lz4. Uses xxhash.h for the auxiliary digest.
+compressor_zstd.h / .cc       Zstd (the new backend): CRTP base + Zstd{Data,CompressData,DecompressData} + compress/decompress_zstd. Buffer-only (no *File).
+compressor_io.h               The library's own EINTR-safe open/close/read/lseek helpers (compressors::detail), so the *File classes don't need Xapiand's io.hh.
 exception.h                   Vendored, trimmed: header-only Error + THROW (std::format). Replaces Xapiand's located-exception wrapper.
 likely.h                      Vendored verbatim from threadpool: self-contained likely()/unlikely().
 xxhash.h                      Vendored, minimal: XXH32 streaming for lz4's get_digest(). BSD-2-Clause.
-test/test.cc                  Round-trip test across all three backends. CTest test `compressors`.
+test/test.cc                  Round-trip test across all three backends (buffer), plus an on-disk *File round trip for deflate/lz4. CTest test `compressors`.
 CMakeLists.txt                STATIC library compressors + alias compressors::compressors; zlib/lz4/zstd discovery; top-level-only test.
 LICENSE                       MIT, Copyright (c) 2015-2019 Dubalu LLC.
 README.md                     What it is, the three backends, API, install, third-party discovery.
@@ -63,9 +64,12 @@ find_library, then FetchContent, and normalize to a single imported target name.
   `compress_<backend>`/`decompress_<backend>` free functions taking
   `std::string_view` and returning `std::string`. A new backend should look like
   the existing three.
-- **Buffer-core only.** Do not re-add fd-streaming (`*File`) classes or anything
-  that needs `io.hh` / file descriptors. That layer belongs in Xapiand. This
-  library compresses in-memory buffers.
+- **Two families per backend.** deflate and lz4 ship both the in-memory buffer-core
+  (`*Data`) and the fd-streaming `*CompressFile` / `*DecompressFile` classes; the
+  `*File` classes use the library's own EINTR-safe helpers in `compressor_io.h`, not
+  `io.hh`, so they carry no external dependency. Keep them self-contained: if you
+  touch the `*File` path, use `compressors::detail`, not a new IO dependency. zstd is
+  buffer-only (its simple API has no streaming leaf here).
 - **Keep the vendored utils self-contained.** `exception.h`, `likely.h`, and
   `xxhash.h` must not grow a dependency on anything outside std and themselves.
   Keep their license headers.
@@ -102,9 +106,10 @@ drop a block or corrupt a round-trip rather than fail to compile.
 - **The iterator block-drop trap.** Covered above; it is the single most likely
   thing to get wrong when adding or editing a backend. If a backend round-trips
   large inputs but loses small/empty ones, this is almost always the cause.
-- **Don't vendor more than you need.** `stringified.hh` was *not* vendored: it was
-  only used by the dropped `*File` classes. Before vendoring a Xapiand header,
-  check the buffer-core actually uses it.
+- **Don't vendor more than you need.** `stringified.hh` is *not* vendored: the
+  `*File` classes take a plain `std::string` filename and call `compressor_io.h`
+  directly, so nothing needs it. Before vendoring a Xapiand header, check the code
+  actually uses it.
 - **lz4 ships no CMake config.** `find_package(lz4)` will not work; use
   `find_path`/`find_library`. zstd *does* ship one. Don't unify them.
 - **macOS keg-only libraries.** Without `CMAKE_PREFIX_PATH=$(brew --prefix)`,
@@ -118,8 +123,9 @@ drop a block or corrupt a round-trip rather than fail to compile.
 
 The deflate and lz4 backends are extracted from
 [Xapiand](https://github.com/Kronuz/Xapiand) (`compressor_deflate.{h,cc}`,
-`compressor_lz4.{h,cc}`), keeping the CRTP buffer-core and dropping the
-fd-streaming `*File` classes (which stay in Xapiand, behind its `io.hh`). The
+`compressor_lz4.{h,cc}`), keeping both the CRTP buffer-core and the fd-streaming
+`*File` classes. The `*File` classes were decoupled from Xapiand's `io.hh` onto the
+library's own `compressor_io.h` helpers, so they ship standalone. The
 **zstd backend is new** and has no upstream counterpart. Keep buffer-core edits
 minimal and reconcilable with upstream; the zstd backend is free to evolve here.
 See `ARCHITECTURE.md` for the full decoupling.
