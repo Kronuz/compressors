@@ -3,11 +3,18 @@ project(compressors LANGUAGES CXX)
 
 include(FetchContent)
 
+# Each backend can be left out, with its dependency, by consumers that need only some.
+option(COMPRESSORS_DEFLATE "Build the deflate backend (zlib)" ON)
+option(COMPRESSORS_LZ4 "Build the LZ4 backend" ON)
+option(COMPRESSORS_ZSTD "Build the Zstandard backend" ON)
+
 # --- Dependency: zlib (deflate backend) ---
 # zlib ships a CMake module finder with CMake itself, so find_package(ZLIB) is
 # the canonical discovery. On macOS with Homebrew, point CMAKE_PREFIX_PATH at
 # $(brew --prefix) so keg-only zlib is found.
-find_package(ZLIB REQUIRED)
+if(COMPRESSORS_DEFLATE)
+  find_package(ZLIB REQUIRED)
+endif()
 
 # --- Dependency: lz4 (lz4 backend) ---
 # lz4 does not install a CMake package config in most distributions (Homebrew
@@ -15,6 +22,7 @@ find_package(ZLIB REQUIRED)
 # library by hand; if neither is present, fall back to fetching the upstream
 # source (lz4/lz4) and building its bundled CMake target. The result is exposed
 # as an imported target `lz4::lz4` either way.
+if(COMPRESSORS_LZ4)
 find_path(LZ4_INCLUDE_DIR lz4.h)
 find_library(LZ4_LIBRARY NAMES lz4 liblz4)
 
@@ -39,12 +47,14 @@ else()
     add_library(lz4::lz4 ALIAS lz4_static)
   endif()
 endif()
+endif()
 
 # --- Dependency: zstd (zstd backend, the value-add) ---
 # zstd does ship a CMake package config (zstdConfig.cmake), so prefer
 # find_package. Homebrew installs it under $(brew --prefix zstd)/lib/cmake/zstd.
 # Fall back to find_library + FetchContent of facebook/zstd if the config is
 # absent. The imported target is normalized to `zstd::libzstd`.
+if(COMPRESSORS_ZSTD)
 find_package(zstd QUIET CONFIG)
 if(zstd_FOUND)
   message(STATUS "compressors: found zstd via CMake config")
@@ -78,18 +88,27 @@ else()
     endif()
   endif()
 endif()
+endif()
 
 # --- Library target ---
 # A small static library carrying the three backends' .cc files plus the public
 # headers and vendored utils. The include dir is the repo root, so a consumer
 # includes "compressor_deflate.h" / "compressor_lz4.h" / "compressor_zstd.h".
-add_library(compressors STATIC
-  compressor_deflate.cc
-  compressor_lz4.cc
-  compressor_zstd.cc)
+add_library(compressors STATIC)
+if(COMPRESSORS_DEFLATE)
+  target_sources(compressors PRIVATE compressor_deflate.cc)
+  target_link_libraries(compressors PUBLIC ZLIB::ZLIB)
+endif()
+if(COMPRESSORS_LZ4)
+  target_sources(compressors PRIVATE compressor_lz4.cc)
+  target_link_libraries(compressors PUBLIC lz4::lz4)
+endif()
+if(COMPRESSORS_ZSTD)
+  target_sources(compressors PRIVATE compressor_zstd.cc)
+  target_link_libraries(compressors PUBLIC zstd::libzstd)
+endif()
 target_include_directories(compressors PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(compressors PUBLIC cxx_std_20)
-target_link_libraries(compressors PUBLIC ZLIB::ZLIB lz4::lz4 zstd::libzstd)
 
 # Alias so consumers can link `compressors::compressors` whether they add this
 # via add_subdirectory or FetchContent.
@@ -97,7 +116,7 @@ add_library(compressors::compressors ALIAS compressors)
 
 # Only build the round-trip test when this repo is the top-level project, so
 # consumers (e.g. via FetchContent) don't build our checks.
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND COMPRESSORS_DEFLATE AND COMPRESSORS_LZ4 AND COMPRESSORS_ZSTD)
   enable_testing()
   add_executable(compressors_test test/test.cc)
   target_link_libraries(compressors_test PRIVATE compressors)

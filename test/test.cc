@@ -251,6 +251,10 @@ int main() {
 		assert(decompress_deflate(d) == original);
 		assert(decompress_lz4(l) == original);
 		assert(decompress_zstd(z) == original);
+		assert(decompress_zstd(z, original.size()) == original);
+		bool threw = false;
+		try { (void)decompress_zstd(z, original.size() - 1); } catch (...) { threw = true; }
+		assert(threw);
 		// The three encodings are genuinely different byte streams.
 		assert(d != l && l != z && d != z);
 		std::printf("cross-check OK: three backends produce distinct, independently decodable frames\n\n");

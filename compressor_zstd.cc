@@ -119,3 +119,19 @@ ZstdDecompressData::next()
 	state = ZstdState::END;
 	return std::string();
 }
+
+
+std::string
+decompress_zstd(std::string_view compressed, std::size_t max_size)
+{
+	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
+	if (content_size == ZSTD_CONTENTSIZE_ERROR || content_size == ZSTD_CONTENTSIZE_UNKNOWN || content_size > max_size) {
+		THROW(ZstdCorruptVolume, "zstd frame is invalid or larger than allowed");
+	}
+	std::string result(static_cast<size_t>(content_size), '\0');
+	size_t dec_size = ZSTD_decompress(result.data(), result.size(), compressed.data(), compressed.size());
+	if (ZSTD_isError(dec_size) != 0u || dec_size != result.size()) {
+		THROW(ZstdCorruptVolume, "zstd frame is corrupt");
+	}
+	return result;
+}

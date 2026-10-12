@@ -84,6 +84,13 @@ The third constructor argument is the backend's tuning knob:
 Each class also has a `reset(data, size, ...)` to reuse the object for another
 buffer without reallocating its scratch buffers.
 
+`decompress_zstd(compressed, max_size)` decompresses one frame whose recorded content
+size is at most `max_size` and throws otherwise, for input that may be corrupt or
+hostile: the one-argument form allocates whatever size the frame claims.
+
+The CMake options `COMPRESSORS_DEFLATE`, `COMPRESSORS_LZ4`, and `COMPRESSORS_ZSTD`
+(all `ON`) leave a backend and its dependency out of the build.
+
 ## Install
 
 CMake. With `FetchContent`:

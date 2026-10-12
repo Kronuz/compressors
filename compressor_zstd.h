@@ -262,6 +262,11 @@ compress_zstd(std::string_view uncompressed)
 }
 
 
+// Decompresses one frame whose recorded content size is at most max_size; anything else
+// throws ZstdCorruptVolume, so a corrupt or hostile frame cannot force a large allocation.
+std::string decompress_zstd(std::string_view compressed, std::size_t max_size);
+
+
 inline std::string
 decompress_zstd(std::string_view compressed)
 {
