@@ -1,5 +1,7 @@
 # compressors
 
+[![CI](https://github.com/Kronuz/compressors/actions/workflows/ci.yml/badge.svg)](https://github.com/Kronuz/compressors/actions/workflows/ci.yml)
+
 Compression with three interchangeable backends: **deflate** (zlib), **lz4**, and
 **zstd** (Zstandard). A small static C++20 library. Each backend compresses an
 in-memory buffer; deflate and lz4 also stream to and from file descriptors.
