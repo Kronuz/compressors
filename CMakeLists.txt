@@ -7,6 +7,9 @@ include(FetchContent)
 option(COMPRESSORS_DEFLATE "Build the deflate backend (zlib)" ON)
 option(COMPRESSORS_LZ4 "Build the LZ4 backend" ON)
 option(COMPRESSORS_ZSTD "Build the Zstandard backend" ON)
+# Different zstd versions may compress the same input to different (valid) bytes, so a
+# consumer that needs byte-identical output on every platform builds the pinned release.
+option(COMPRESSORS_ZSTD_PINNED "Build zstd from its pinned release, ignoring the system's" OFF)
 
 # --- Dependency: zlib (deflate backend) ---
 # zlib ships a CMake module finder with CMake itself, so find_package(ZLIB) is
@@ -53,9 +56,16 @@ endif()
 # zstd does ship a CMake package config (zstdConfig.cmake), so prefer
 # find_package. Homebrew installs it under $(brew --prefix zstd)/lib/cmake/zstd.
 # Fall back to find_library + FetchContent of facebook/zstd if the config is
-# absent. The imported target is normalized to `zstd::libzstd`.
+# absent, and fetch it always under COMPRESSORS_ZSTD_PINNED. The imported target is
+# normalized to `zstd::libzstd`.
 if(COMPRESSORS_ZSTD)
-find_package(zstd QUIET CONFIG)
+if(NOT COMPRESSORS_ZSTD_PINNED)
+  find_package(zstd QUIET CONFIG)
+  if(NOT zstd_FOUND)
+    find_path(ZSTD_INCLUDE_DIR zstd.h)
+    find_library(ZSTD_LIBRARY NAMES zstd libzstd)
+  endif()
+endif()
 if(zstd_FOUND)
   message(STATUS "compressors: found zstd via CMake config")
   if(TARGET zstd::libzstd_shared AND NOT TARGET zstd::libzstd)
@@ -64,8 +74,6 @@ if(zstd_FOUND)
     add_library(zstd::libzstd ALIAS zstd::libzstd_static)
   endif()
 else()
-  find_path(ZSTD_INCLUDE_DIR zstd.h)
-  find_library(ZSTD_LIBRARY NAMES zstd libzstd)
   if(ZSTD_INCLUDE_DIR AND ZSTD_LIBRARY)
     message(STATUS "compressors: found system zstd (${ZSTD_LIBRARY})")
     add_library(zstd::libzstd UNKNOWN IMPORTED)
@@ -73,13 +81,16 @@ else()
       IMPORTED_LOCATION "${ZSTD_LIBRARY}"
       INTERFACE_INCLUDE_DIRECTORIES "${ZSTD_INCLUDE_DIR}")
   else()
-    message(STATUS "compressors: system zstd not found, fetching facebook/zstd")
+    message(STATUS "compressors: fetching facebook/zstd v1.5.7")
     FetchContent_Declare(
       zstd
       GIT_REPOSITORY https://github.com/facebook/zstd.git
       GIT_TAG        v1.5.7
       SOURCE_SUBDIR  build/cmake
     )
+    set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(zstd)
     if(TARGET libzstd_static AND NOT TARGET zstd::libzstd)
       add_library(zstd::libzstd ALIAS libzstd_static)
