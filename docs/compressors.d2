@@ -1,0 +1,30 @@
+# compressors: three backends, one shape.
+# Render: d2 --layout elk --sketch --theme 302 docs/compressors.d2 docs/compressors.svg
+direction: right
+
+input: std::string_view {
+  label: "your bytes\nstd::string_view"
+}
+
+backends: one shape, three formats {
+  deflate: "deflate (zlib)\nraw or gzip"
+  lz4: "lz4\nblock-streamed records"
+  zstd: "zstd\nstandard frames"
+}
+
+out: std::string {
+  label: "compressed\nstd::string"
+}
+
+files: file descriptors {
+  label: "*CompressFile / *DecompressFile\n(deflate, lz4)"
+}
+
+input -> backends.deflate
+input -> backends.lz4
+input -> backends.zstd
+backends.deflate -> out
+backends.lz4 -> out
+backends.zstd -> out
+backends.deflate -> files {style.stroke-dash: 3}
+backends.lz4 -> files {style.stroke-dash: 3}

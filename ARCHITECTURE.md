@@ -135,7 +135,7 @@ its license/attribution:
   from the threadpool extraction's self-contained copy (it detects
   `__builtin_expect` via `__has_builtin`, no `config.h`). Only the macro-guard
   prefix is renamed to `COMPRESSORS_*`.
-- **`xxhash.h`** — a minimal, self-contained XXH32 streaming implementation
+- **`xxh32_stream.h`** — a minimal, self-contained XXH32 streaming implementation
   (`XXH32_state_t`, `XXH32_reset` / `XXH32_update` / `XXH32_digest`) for lz4's
   `get_digest()`. Xapiand pulled in the full xxHash distribution; since the digest
   is a non-load-bearing auxiliary checksum, vendoring only the XXH32 surface
@@ -170,7 +170,7 @@ zstd backend. The decoupling was:
    `stringified.hh` includes (they depend on Xapiand's `opts.h`).
 2. Replace the `exception.h` that wraps located-exception with a trimmed
    header-only `Error` + `THROW`.
-3. Vendor `likely.h` and `xxhash.h` self-contained.
+3. Vendor `likely.h` and `xxh32_stream.h` self-contained.
 4. Modernize the iterators off the removed `std::iterator` base.
 
 Changes to the buffer-core logic itself were kept minimal so they can be

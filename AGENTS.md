@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Working notes for agents modifying this repository. For the design read
-`ARCHITECTURE.md`; for usage and the backend comparison read `README.md`. This
+`ARCHITECTURE.md`; for usage read `README.md`; for the backend comparison read `docs/API.md`. This
 file covers the repo layout, how to build and test, the third-party discovery,
 the invariants you must not break, and the traps.
 
@@ -9,16 +9,18 @@ the invariants you must not break, and the traps.
 
 ```
 compressor_deflate.h / .cc    Deflate (zlib): CRTP base + Deflate{Data,CompressData,DecompressData} (buffer) + Deflate{Compress,Decompress}File (fd-streaming) + compress/decompress_deflate.
-compressor_lz4.h / .cc        LZ4: CRTP base + LZ4{Data,CompressData,DecompressData} (buffer) + LZ4{Compress,Decompress}File (fd-streaming) + compress/decompress_lz4. Uses xxhash.h for the auxiliary digest.
+compressor_lz4.h / .cc        LZ4: CRTP base + LZ4{Data,CompressData,DecompressData} (buffer) + LZ4{Compress,Decompress}File (fd-streaming) + compress/decompress_lz4. Uses xxh32_stream.h for the auxiliary digest.
 compressor_zstd.h / .cc       Zstd (the new backend): CRTP base + Zstd{Data,CompressData,DecompressData} + compress/decompress_zstd. Buffer-only (no *File).
 compressor_io.h               The library's own EINTR-safe open/close/read/lseek helpers (compressors::detail), so the *File classes don't need Xapiand's io.hh.
 exception.h                   Vendored, trimmed: header-only Error + THROW (std::format). Replaces Xapiand's located-exception wrapper.
 likely.h                      Vendored verbatim from threadpool: self-contained likely()/unlikely().
-xxhash.h                      Vendored, minimal: XXH32 streaming for lz4's get_digest(). BSD-2-Clause.
+xxh32_stream.h                Vendored, minimal: XXH32 streaming for lz4's get_digest(), namespaced off the global xxhash API. BSD-2-Clause.
 test/test.cc                  Round-trip test across all three backends (buffer), plus an on-disk *File round trip for deflate/lz4. CTest test `compressors`.
 CMakeLists.txt                STATIC library compressors + alias compressors::compressors; zlib/lz4/zstd discovery; top-level-only test.
 LICENSE                       MIT, Copyright (c) 2015-2019 Dubalu LLC.
-README.md                     What it is, the three backends, API, install, third-party discovery.
+README.md                     What it is, install, quick start.
+docs/API.md                   The backends and formats, the interface, dependency discovery, build options.
+docs/compressors.d2           The README diagram's source (docs/compressors.svg is rendered from it).
 ARCHITECTURE.md               CRTP base, buffer-core vs fd-streaming split, per-backend specifics, vendored utils, decoupling.
 ```
 
@@ -71,7 +73,7 @@ find_library, then FetchContent, and normalize to a single imported target name.
   touch the `*File` path, use `compressors::detail`, not a new IO dependency. zstd is
   buffer-only (its simple API has no streaming leaf here).
 - **Keep the vendored utils self-contained.** `exception.h`, `likely.h`, and
-  `xxhash.h` must not grow a dependency on anything outside std and themselves.
+  `xxh32_stream.h` must not grow a dependency on anything outside std and themselves.
   Keep their license headers.
 
 ## Load-bearing invariants
