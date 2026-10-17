@@ -10,6 +10,9 @@ option(COMPRESSORS_ZSTD "Build the Zstandard backend" ON)
 # Different zstd versions may compress the same input to different (valid) bytes, so a
 # consumer that needs byte-identical output on every platform builds the pinned release.
 option(COMPRESSORS_ZSTD_PINNED "Build zstd from its pinned release, ignoring the system's" OFF)
+if(NOT COMPRESSORS_DEFLATE AND NOT COMPRESSORS_LZ4 AND NOT COMPRESSORS_ZSTD)
+  message(FATAL_ERROR "compressors: enable at least one of COMPRESSORS_DEFLATE, COMPRESSORS_LZ4, COMPRESSORS_ZSTD")
+endif()
 
 # --- Dependency: zlib (deflate backend) ---
 # zlib ships a CMake module finder with CMake itself, so find_package(ZLIB) is
@@ -125,13 +128,20 @@ target_compile_features(compressors PUBLIC cxx_std_20)
 # via add_subdirectory or FetchContent.
 add_library(compressors::compressors ALIAS compressors)
 
-# Only build the round-trip test when this repo is the top-level project, so
-# consumers (e.g. via FetchContent) don't build our checks.
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND COMPRESSORS_DEFLATE AND COMPRESSORS_LZ4 AND COMPRESSORS_ZSTD)
+# Only build the checks when this repo is the top-level project, so consumers (e.g. via
+# FetchContent) don't build them. The round-trip test covers whichever backends are built;
+# the example dispatches over all three.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   enable_testing()
   add_executable(compressors_test test/test.cc)
   target_link_libraries(compressors_test PRIVATE compressors)
+  target_compile_definitions(compressors_test PRIVATE
+    COMPRESSORS_TEST_DEFLATE=$<BOOL:${COMPRESSORS_DEFLATE}>
+    COMPRESSORS_TEST_LZ4=$<BOOL:${COMPRESSORS_LZ4}>
+    COMPRESSORS_TEST_ZSTD=$<BOOL:${COMPRESSORS_ZSTD}>)
   add_test(NAME compressors COMMAND compressors_test)
+endif()
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND COMPRESSORS_DEFLATE AND COMPRESSORS_LZ4 AND COMPRESSORS_ZSTD)
 
   # A realistic usage example that mirrors Xapiand's one-shot helpers, block
   # streaming classes, and LZ4-default codec dispatch. It self-checks and is

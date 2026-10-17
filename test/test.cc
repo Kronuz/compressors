@@ -21,9 +21,15 @@
 #include <unistd.h>
 #include <vector>
 
+#if COMPRESSORS_TEST_DEFLATE
 #include "compressor_deflate.h"
+#endif
+#if COMPRESSORS_TEST_LZ4
 #include "compressor_lz4.h"
+#endif
+#if COMPRESSORS_TEST_ZSTD
 #include "compressor_zstd.h"
+#endif
 
 
 // The spread of inputs every backend must round-trip.
@@ -221,24 +227,27 @@ static void test_file_backend(const char* name) {
 int main() {
 	std::printf("compressors round-trip test\n\n");
 
+	// Each backend built, and its on-disk round trips through the fd-streaming *File
+	// classes (deflate and lz4; zstd has none), which also leave a borrowed fd open.
+#if COMPRESSORS_TEST_DEFLATE
 	test_backend("deflate",
 		[](std::string_view s) { return compress_deflate(s); },
 		[](std::string_view s) { return decompress_deflate(s); });
-
+	test_file_backend<DeflateCompressFile, DeflateDecompressFile>("deflate");
+#endif
+#if COMPRESSORS_TEST_LZ4
 	test_backend("lz4",
 		[](std::string_view s) { return compress_lz4(s); },
 		[](std::string_view s) { return decompress_lz4(s); });
-
+	test_file_backend<LZ4CompressFile, LZ4DecompressFile>("lz4");
+#endif
+#if COMPRESSORS_TEST_ZSTD
 	test_backend("zstd",
 		[](std::string_view s) { return compress_zstd(s); },
 		[](std::string_view s) { return decompress_zstd(s); });
+#endif
 
-	// On-disk round trips through the fd-streaming *File classes (deflate and
-	// lz4; zstd has no *File variant). Also asserts the adopt-an-fd ctor leaves
-	// a borrowed fd open.
-	test_file_backend<DeflateCompressFile, DeflateDecompressFile>("deflate");
-	test_file_backend<LZ4CompressFile, LZ4DecompressFile>("lz4");
-
+#if COMPRESSORS_TEST_DEFLATE && COMPRESSORS_TEST_LZ4 && COMPRESSORS_TEST_ZSTD
 	// Cross-check that the three backends are independent: each decodes only its
 	// own output. A spot check that compressed forms differ for a non-trivial
 	// input (they use different formats).
@@ -259,6 +268,7 @@ int main() {
 		assert(d != l && l != z && d != z);
 		std::printf("cross-check OK: three backends produce distinct, independently decodable frames\n\n");
 	}
+#endif
 
 	std::printf("all compressors tests passed\n");
 	return 0;

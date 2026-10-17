@@ -85,7 +85,9 @@ cmake -B build -DCMAKE_PREFIX_PATH="$(brew --prefix)"
 ### Build options
 
 - `COMPRESSORS_DEFLATE`, `COMPRESSORS_LZ4`, `COMPRESSORS_ZSTD` (all `ON`) leave a
-  backend and its dependency out of the build.
+  backend and its dependency out of the build. At least one must stay on; configuring with
+  all three off stops with an error. The round-trip test covers whichever backends are
+  built; the dispatch example needs all three.
 - `COMPRESSORS_ZSTD_PINNED` (`OFF`) builds zstd from its pinned release (`v1.5.7`)
   instead of the system's. Different zstd versions can compress the same input to
   different valid bytes, so a consumer that needs byte-identical output on every
