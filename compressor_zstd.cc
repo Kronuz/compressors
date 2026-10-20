@@ -22,6 +22,8 @@
 
 #include "compressor_zstd.h"
 
+#include <zstd_errors.h>  // for ZSTD_getErrorCode, which older zstd.h headers leave out
+
 
 /*
  * Constructor compress with data
