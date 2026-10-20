@@ -21,8 +21,11 @@ three different APIs.
   I/O.
 - **Safe on hostile input.** `decompress_zstd(bytes, max_size)` refuses frames
   that claim more than `max_size`.
-- **Reproducible bytes.** `COMPRESSORS_ZSTD_PINNED` builds a pinned zstd, so
-  output is byte-identical on every platform.
+- **Blocks into your buffer.** `compress_lz4_block` and `compress_zstd_into` (and
+  their decoders, bounded by the exact size) write one block into a buffer you own,
+  with per-thread contexts: no allocation per block.
+- **Reproducible bytes.** `COMPRESSORS_ZSTD_PINNED` and `COMPRESSORS_LZ4_PINNED`
+  build pinned releases, so output is byte-identical on every platform.
 - **Finds or fetches its dependencies.** zlib from the system; LZ4 and zstd from
   the system or fetched.
 

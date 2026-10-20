@@ -10,6 +10,8 @@ option(COMPRESSORS_ZSTD "Build the Zstandard backend" ON)
 # Different zstd versions may compress the same input to different (valid) bytes, so a
 # consumer that needs byte-identical output on every platform builds the pinned release.
 option(COMPRESSORS_ZSTD_PINNED "Build zstd from its pinned release, ignoring the system's" OFF)
+# The same for LZ4, whose versions may also compress one input to different valid bytes.
+option(COMPRESSORS_LZ4_PINNED "Build LZ4 from its pinned release, ignoring the system's" OFF)
 if(NOT COMPRESSORS_DEFLATE AND NOT COMPRESSORS_LZ4 AND NOT COMPRESSORS_ZSTD)
   message(FATAL_ERROR "compressors: enable at least one of COMPRESSORS_DEFLATE, COMPRESSORS_LZ4, COMPRESSORS_ZSTD")
 endif()
@@ -26,20 +28,25 @@ endif()
 # lz4 does not install a CMake package config in most distributions (Homebrew
 # included), so there is no find_package(lz4). Discover the header and the
 # library by hand; if neither is present, fall back to fetching the upstream
-# source (lz4/lz4) and building its bundled CMake target. The result is exposed
-# as an imported target `lz4::lz4` either way.
+# source (lz4/lz4) and building its bundled CMake target, as COMPRESSORS_LZ4_PINNED
+# always does. The result is exposed as an imported target `lz4::lz4` either way.
 if(COMPRESSORS_LZ4)
-find_path(LZ4_INCLUDE_DIR lz4.h)
-find_library(LZ4_LIBRARY NAMES lz4 liblz4)
+if(NOT COMPRESSORS_LZ4_PINNED)
+  find_path(LZ4_INCLUDE_DIR lz4.h)
+  find_library(LZ4_LIBRARY NAMES lz4 liblz4)
+endif()
 
-if(LZ4_INCLUDE_DIR AND LZ4_LIBRARY)
+if(NOT COMPRESSORS_LZ4_PINNED AND LZ4_INCLUDE_DIR AND LZ4_LIBRARY)
   message(STATUS "compressors: found system lz4 (${LZ4_LIBRARY})")
   add_library(lz4::lz4 UNKNOWN IMPORTED)
   set_target_properties(lz4::lz4 PROPERTIES
     IMPORTED_LOCATION "${LZ4_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${LZ4_INCLUDE_DIR}")
 else()
-  message(STATUS "compressors: system lz4 not found, fetching lz4/lz4")
+  message(STATUS "compressors: fetching lz4/lz4 v1.10.0")
+  # Only the static library: no command-line programs.
+  set(LZ4_BUILD_CLI OFF CACHE BOOL "" FORCE)
+  set(LZ4_BUILD_LEGACY_LZ4C OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(
     lz4
     GIT_REPOSITORY https://github.com/lz4/lz4.git
@@ -133,8 +140,9 @@ add_library(compressors::compressors ALIAS compressors)
 # the example dispatches over all three.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   enable_testing()
+  find_package(Threads REQUIRED)
   add_executable(compressors_test test/test.cc)
-  target_link_libraries(compressors_test PRIVATE compressors)
+  target_link_libraries(compressors_test PRIVATE compressors Threads::Threads)
   target_compile_definitions(compressors_test PRIVATE
     COMPRESSORS_TEST_DEFLATE=$<BOOL:${COMPRESSORS_DEFLATE}>
     COMPRESSORS_TEST_LZ4=$<BOOL:${COMPRESSORS_LZ4}>
