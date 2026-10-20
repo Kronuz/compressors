@@ -26,6 +26,11 @@
 #include "compressor_deflate.h"
 #endif
 #if COMPRESSORS_TEST_LZ4
+// What an inlined xxHash (lz4's xxhash.c under XXH_INLINE_ALL, which a hashing library on the
+// same include path may pull in first) declares at global scope: compressor_lz4.h's own XXH32
+// must still compile beside it.
+[[maybe_unused]] static const unsigned PRIME32_1 = 2654435761U, PRIME32_2 = 2246822519U, PRIME32_3 = 3266489917U, PRIME32_4 = 668265263U,
+	PRIME32_5 = 374761393U;
 #include "compressor_lz4.h"
 #endif
 #if COMPRESSORS_TEST_ZSTD
