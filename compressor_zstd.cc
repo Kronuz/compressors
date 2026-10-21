@@ -22,6 +22,8 @@
 
 #include "compressor_zstd.h"
 
+#include <zstd_errors.h>  // for ZSTD_getErrorCode, which older zstd.h headers leave out
+
 
 /*
  * Constructor compress with data
@@ -134,4 +136,55 @@ decompress_zstd(std::string_view compressed, std::size_t max_size)
 		THROW(ZstdCorruptVolume, "zstd frame is corrupt");
 	}
 	return result;
+}
+
+
+namespace {
+
+// This thread's contexts, created on first use and freed when the thread ends.
+struct zstd_contexts {
+	ZSTD_CCtx* c = nullptr;
+	ZSTD_DCtx* d = nullptr;
+	~zstd_contexts() {
+		ZSTD_freeCCtx(c);
+		ZSTD_freeDCtx(d);
+	}
+};
+thread_local zstd_contexts contexts;
+
+}  // namespace
+
+
+std::size_t
+zstd_frame_bound(std::size_t n) noexcept
+{
+	return ZSTD_compressBound(n);
+}
+
+
+std::size_t
+compress_zstd_into(std::string_view src, char* dst, std::size_t capacity, int level)
+{
+	if (!contexts.c && !(contexts.c = ZSTD_createCCtx())) {
+		THROW(ZstdException, "ZSTD_createCCtx failed");
+	}
+	const size_t n = ZSTD_compressCCtx(contexts.c, dst, capacity, src.data(), src.size(), level);
+	if (ZSTD_isError(n) != 0u) {
+		if (ZSTD_getErrorCode(n) == ZSTD_error_dstSize_tooSmall) {
+			return 0;
+		}
+		THROW(ZstdException, "ZSTD_compressCCtx failed: {}", ZSTD_getErrorName(n));
+	}
+	return n;
+}
+
+
+bool
+decompress_zstd_into(std::string_view src, char* dst, std::size_t dst_size) noexcept
+{
+	if (!contexts.d && !(contexts.d = ZSTD_createDCtx())) {
+		return false;
+	}
+	const size_t n = ZSTD_decompressDCtx(contexts.d, dst, dst_size, src.data(), src.size());
+	return ZSTD_isError(n) == 0u && n == dst_size;
 }

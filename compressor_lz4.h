@@ -458,3 +458,21 @@ decompress_lz4(std::string_view compressed)
 	}
 	return decompressed;
 }
+
+
+// One-shot LZ4 blocks: the raw LZ4 block format, no framing, for a caller that records
+// each block's uncompressed size itself. They write into the caller's buffer, so a
+// steady stream of blocks allocates nothing.
+
+// The most compress_lz4_block writes for n input bytes (0 past LZ4's input limit).
+std::size_t lz4_block_bound(std::size_t n) noexcept;
+
+// Compresses src into dst[0, capacity) as LZ4_compress_default does (the same bytes),
+// with this thread's reused state; returns the bytes written, or 0 when they do not fit
+// or src passes LZ4's input limit.
+std::size_t compress_lz4_block(std::string_view src, char* dst, std::size_t capacity) noexcept;
+
+// Decompresses one block into exactly dst_size bytes. False when the block is malformed
+// or decodes to any other size; it never reads past src or writes past dst_size, so it is
+// safe on corrupt or hostile input.
+bool decompress_lz4_block(std::string_view src, char* dst, std::size_t dst_size) noexcept;

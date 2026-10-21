@@ -382,3 +382,39 @@ LZ4DecompressFile::next()
 
 	return result;
 }
+
+
+std::size_t
+lz4_block_bound(std::size_t n) noexcept
+{
+	return n > LZ4_MAX_INPUT_SIZE ? 0 : static_cast<std::size_t>(LZ4_compressBound(static_cast<int>(n)));
+}
+
+
+std::size_t
+compress_lz4_block(std::string_view src, char* dst, std::size_t capacity) noexcept
+{
+	// LZ4_compress_default's state, kept per thread instead of on the stack each call.
+	struct state {
+		void* p = std::malloc(static_cast<std::size_t>(LZ4_sizeofState()));
+		~state() { std::free(p); }
+	};
+	thread_local state s;
+	if (!s.p || src.size() > LZ4_MAX_INPUT_SIZE) {
+		return 0;
+	}
+	const int cap = capacity > static_cast<std::size_t>(INT32_MAX) ? INT32_MAX : static_cast<int>(capacity);
+	const int n = LZ4_compress_fast_extState(s.p, src.data(), dst, static_cast<int>(src.size()), cap, 1);
+	return n > 0 ? static_cast<std::size_t>(n) : 0;
+}
+
+
+bool
+decompress_lz4_block(std::string_view src, char* dst, std::size_t dst_size) noexcept
+{
+	if (src.size() > static_cast<std::size_t>(INT32_MAX) || dst_size > static_cast<std::size_t>(INT32_MAX)) {
+		return false;
+	}
+	const int n = LZ4_decompress_safe(src.data(), dst, static_cast<int>(src.size()), static_cast<int>(dst_size));
+	return n >= 0 && static_cast<std::size_t>(n) == dst_size;
+}

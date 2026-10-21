@@ -84,7 +84,9 @@ inline uint32_t round(uint32_t acc, uint32_t input) noexcept {
 
 // In a namespace so these never collide with a real xxHash (XXH32_state_t/
 // XXH32_reset/...) the host may also have on its include path (e.g. lz4's xxhash.h
-// pulled in by the hashes sibling). Renamed off "xxhash.h" for the same reason.
+// pulled in by the hashes sibling). Renamed off "xxhash.h" for the same reason. The
+// functions name the constants through using-declarations, which hide an inlined
+// xxHash's global PRIME32_* where a using-directive would make them ambiguous.
 namespace compressors {
 
 struct XXH32_state_t {
@@ -97,7 +99,7 @@ struct XXH32_state_t {
 
 
 inline int XXH32_reset(XXH32_state_t* state, uint32_t seed) noexcept {
-	using namespace compressors_xxhash_detail;
+	using compressors_xxhash_detail::PRIME32_1, compressors_xxhash_detail::PRIME32_2;
 	state->total_len = 0;
 	state->large_len = 0;
 	state->v1 = seed + PRIME32_1 + PRIME32_2;
@@ -111,7 +113,7 @@ inline int XXH32_reset(XXH32_state_t* state, uint32_t seed) noexcept {
 
 
 inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noexcept {
-	using namespace compressors_xxhash_detail;
+	using compressors_xxhash_detail::read32_le, compressors_xxhash_detail::round;
 	if (input == nullptr) {
 		return 0;
 	}
@@ -170,7 +172,9 @@ inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noe
 
 
 inline uint32_t XXH32_digest(const XXH32_state_t* state) noexcept {
-	using namespace compressors_xxhash_detail;
+	using compressors_xxhash_detail::PRIME32_1, compressors_xxhash_detail::PRIME32_2, compressors_xxhash_detail::PRIME32_3,
+		compressors_xxhash_detail::PRIME32_4, compressors_xxhash_detail::PRIME32_5, compressors_xxhash_detail::rotl32,
+		compressors_xxhash_detail::read32_le;
 	uint32_t h32;
 
 	if (state->large_len) {

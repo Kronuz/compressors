@@ -277,3 +277,19 @@ decompress_zstd(std::string_view compressed)
 	}
 	return decompressed;
 }
+
+
+// One-shot zstd frames into the caller's buffer, with this thread's reused compression and
+// decompression contexts, so a steady stream of frames allocates nothing.
+
+// The most compress_zstd_into writes for n input bytes.
+std::size_t zstd_frame_bound(std::size_t n) noexcept;
+
+// Compresses src as one frame recording its content size, at `level`, into dst[0, capacity):
+// the bytes ZSTD_compress writes at that level. Returns the bytes written, or 0 when they do
+// not fit; throws ZstdException on any other failure.
+std::size_t compress_zstd_into(std::string_view src, char* dst, std::size_t capacity, int level);
+
+// Decompresses into exactly dst_size bytes. False when the input is malformed or decodes to
+// any other size; it never writes past dst_size, so it is safe on corrupt or hostile input.
+bool decompress_zstd_into(std::string_view src, char* dst, std::size_t dst_size) noexcept;

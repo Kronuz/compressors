@@ -61,6 +61,33 @@ hostile: the one-argument form allocates whatever size the frame claims.
 The CMake options `COMPRESSORS_DEFLATE`, `COMPRESSORS_LZ4`, and `COMPRESSORS_ZSTD`
 (all `ON`) leave a backend and its dependency out of the build.
 
+## One-shot blocks into the caller's buffer
+
+For a storage layer that keeps each block's uncompressed size itself (a block index), LZ4
+and zstd also compress and decompress one block straight into a buffer the caller owns,
+with contexts reused per thread, so a steady stream of blocks allocates nothing:
+
+```cpp
+std::size_t lz4_block_bound(std::size_t n) noexcept;
+std::size_t compress_lz4_block(std::string_view src, char* dst, std::size_t capacity) noexcept;
+bool decompress_lz4_block(std::string_view src, char* dst, std::size_t dst_size) noexcept;
+
+std::size_t zstd_frame_bound(std::size_t n) noexcept;
+std::size_t compress_zstd_into(std::string_view src, char* dst, std::size_t capacity, int level);
+bool decompress_zstd_into(std::string_view src, char* dst, std::size_t dst_size) noexcept;
+```
+
+- `compress_lz4_block` writes the raw LZ4 block format, the bytes `LZ4_compress_default`
+  writes, not `compress_lz4`'s record framing. `compress_zstd_into` writes a standard frame
+  recording its content size, the bytes `ZSTD_compress` writes at that level (at level 3,
+  `compress_zstd`'s). Both return the bytes written, or 0 when the capacity is too small;
+  size the buffer with the bound.
+- Both decoders take the exact uncompressed size and return false for a malformed block or
+  one that decodes to any other size. They never read past `src` or write past `dst_size`,
+  so they are safe on corrupt or hostile input.
+- The LZ4 compression state and the zstd contexts are created on a thread's first call and
+  freed when the thread ends.
+
 ## Dependencies and build options
 
 ### How the third-party libraries are found
@@ -92,3 +119,5 @@ cmake -B build -DCMAKE_PREFIX_PATH="$(brew --prefix)"
   instead of the system's. Different zstd versions can compress the same input to
   different valid bytes, so a consumer that needs byte-identical output on every
   platform, such as strata's segment fixtures, turns it on.
+- `COMPRESSORS_LZ4_PINNED` (`OFF`) does the same for LZ4, building its pinned release
+  (`v1.10.0`, the static library only) instead of the system's.
