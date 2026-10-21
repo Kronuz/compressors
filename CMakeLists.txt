@@ -50,7 +50,7 @@ else()
   FetchContent_Declare(
     lz4
     GIT_REPOSITORY https://github.com/lz4/lz4.git
-    GIT_TAG        v1.10.0
+    GIT_TAG        ebb370ca83af193212df4dcbadcc5d87bc0de2f0  # v1.10.0, by commit: a moved tag cannot change the decoders
     SOURCE_SUBDIR  build/cmake
   )
   FetchContent_MakeAvailable(lz4)
@@ -95,7 +95,7 @@ else()
     FetchContent_Declare(
       zstd
       GIT_REPOSITORY https://github.com/facebook/zstd.git
-      GIT_TAG        v1.5.7
+      GIT_TAG        f8745da6ff1ad1e7bab384bd1f9d742439278e99  # v1.5.7, by commit
       SOURCE_SUBDIR  build/cmake
     )
     set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
