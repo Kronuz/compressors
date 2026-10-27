@@ -21,6 +21,7 @@ three different APIs.
   I/O.
 - **Safe on hostile input.** `decompress_zstd(bytes, max_size)` refuses frames
   that claim more than `max_size`.
+  `decompress_deflate(bytes, max_size, true)` bounds decoded gzip output across all members.
 - **Blocks into your buffer.** `compress_lz4_block` and `compress_zstd_into` (and
   their decoders, bounded by the exact size) write one block into a buffer you own,
   with per-thread contexts: no allocation per block.

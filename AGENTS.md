@@ -105,6 +105,8 @@ drop a block or corrupt a round-trip rather than fail to compile.
 
 ## Traps
 
+The buffer deflate/gzip decoder emits at most 16 KiB per iterator turn and checks a cumulative output bound before constructing a block. Existing constructors default to unlimited output; use the fourth argument or `decompress_deflate(bytes, bound, gzip)` for untrusted data. Reset preserves the bound unless explicitly replaced. Test truncation, checksums, extra data, concatenated gzip members and iterator end behavior together. Changing decoder fields or the constructor signature requires consumers to rebuild; the file decoder remains unchanged.
+
 - **The iterator block-drop trap.** Covered above; it is the single most likely
   thing to get wrong when adding or editing a backend. If a backend round-trips
   large inputs but loses small/empty ones, this is almost always the cause.

@@ -79,13 +79,9 @@ including the path that adopts a caller-owned fd.
 
 ### deflate (`compressor_deflate.cc`)
 
-A thin wrapper over zlib's streaming `deflate`/`inflate`. `init()` calls
-`deflateInit2` / `inflateInit2` (with `15 + 16` window bits for gzip, plain `15`
-otherwise, and a `-15` raw fallback on inflate) and returns the first 16 KB
-block. `next()` feeds successive `DEFLATE_BLOCK_SIZE` (16384) chunks and appends
-the deflated output, ending when `data_offset` passes `data_size`. The leaf owns
-a `z_stream` and tears it down (`deflateEnd` / `inflateEnd`) in its destructor.
-Errors go through `THROW(DeflateException, zerr(stream))`.
+The buffer decoder feeds at most `DEFLATE_BLOCK_SIZE` encoded bytes at a time and emits at most one equally sized output block per iterator turn. A cumulative output bound is checked before constructing that block. The last block remains visible until the next turn marks the iterator ended. End-of-stream and checksums are mandatory. Gzip resets the same zlib decoder between concatenated members and preserves the cumulative bound; zlib mode rejects extra streams. The optional bound changes the decoder class layout and constructor ABI, so consumers rebuild together. The file codec remains independent.
+
+The buffer compressor and file codecs retain zlib's streaming `deflate`/`inflate` implementation. Each leaf owns its `z_stream` and releases it with `deflateEnd` or `inflateEnd`. Errors use `DeflateException`.
 
 ### lz4 (`compressor_lz4.cc`)
 

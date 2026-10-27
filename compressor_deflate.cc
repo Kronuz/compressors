@@ -23,6 +23,7 @@
 #include "compressor_deflate.h"
 
 #include <cassert>               // for assert
+#include <algorithm>
 
 
 std::string zerr(int ret) {
@@ -155,9 +156,9 @@ DeflateCompressData::next()
 /*
  * Constructor decompress with data
  */
-DeflateDecompressData::DeflateDecompressData(const char* data_, size_t data_size_, bool gzip_)
+DeflateDecompressData::DeflateDecompressData(const char* data_, size_t data_size_, bool gzip_, size_t maximum_output_)
 	: DeflateData(data_, data_size_),
-	  DeflateBlockStreaming(gzip_) { }
+	  DeflateBlockStreaming(gzip_), maximum_output(maximum_output_) { }
 
 
 DeflateDecompressData::~DeflateDecompressData()
@@ -180,6 +181,8 @@ DeflateDecompressData::init()
 	strm.opaque = Z_NULL;
 	strm.avail_in = 0;
 	strm.next_in = Z_NULL;
+	data_offset = output_size = 0;
+	finished = member_finished = false;
 
 	stream = inflateInit2(&strm, 15 + (gzip ? 16 : 0));
 	if (stream < 0) {
@@ -206,36 +209,45 @@ DeflateDecompressData::next()
 {
 	assert(buffer);
 
-	if (data_offset > data_size) {
+	if (finished) {
 		state = DeflateState::END;
 		return std::string();
 	}
 
-	if (data_offset < data_size) {
-		strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + data_offset));
-	}
-
-	auto remain_size = data_size - data_offset;
-	if (remain_size > DEFLATE_BLOCK_SIZE) {
-		strm.avail_in = DEFLATE_BLOCK_SIZE;
-	} else {
-		strm.avail_in = remain_size;
-	}
-
-	std::string result;
-	do {
-		strm.avail_out = DEFLATE_BLOCK_SIZE;
+	for (;;) {
+		if (member_finished) {
+			stream = inflateReset2(&strm, 15 + 16);
+			if (stream != Z_OK) THROW(DeflateException, zerr(stream));
+			member_finished = false;
+		}
+		if (!strm.avail_in && data_offset < data_size) {
+			const auto size = std::min<size_t>(data_size - data_offset, DEFLATE_BLOCK_SIZE);
+			strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + data_offset));
+			strm.avail_in = static_cast<uInt>(size);
+			data_offset += size;
+		}
+		const auto remaining = maximum_output - output_size;
+		const auto capacity = remaining >= DEFLATE_BLOCK_SIZE ? DEFLATE_BLOCK_SIZE : remaining + 1;
+		strm.avail_out = static_cast<uInt>(capacity);
 		strm.next_out = reinterpret_cast<Bytef*>(&buffer[0]);
+		const auto previous_input = strm.avail_in;
 		stream = inflate(&strm, Z_NO_FLUSH);
-		if (stream < 0 && stream != Z_BUF_ERROR) {
+		if (stream != Z_OK && stream != Z_STREAM_END && stream != Z_BUF_ERROR) {
 			THROW(DeflateException, zerr(stream));
 		}
-		auto bytes_decompressed = DEFLATE_BLOCK_SIZE - strm.avail_out;
-		result.append(&buffer[0], bytes_decompressed);
-	} while (strm.avail_out == 0);
-
-	data_offset += DEFLATE_BLOCK_SIZE;
-	return result;
+		const auto produced = capacity - strm.avail_out;
+		if (produced > remaining) THROW(DeflateException, "decompressed data exceeds output bound");
+		output_size += produced;
+		if (stream == Z_STREAM_END) {
+			if (strm.avail_in || data_offset != data_size) {
+				if (!gzip) THROW(DeflateException, "trailing compressed data");
+				member_finished = true;
+			} else finished = true;
+		}
+		if (produced || finished || member_finished) return std::string(buffer.get(), produced);
+		if (previous_input == strm.avail_in || (!strm.avail_in && data_offset == data_size))
+			THROW(DeflateException, "truncated or stalled compressed data");
+	}
 }
 
 

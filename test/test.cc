@@ -285,12 +285,66 @@ static void test_block_codec(const char* name, Bound bound, Compress compress, D
 #endif
 
 
+#if COMPRESSORS_TEST_DEFLATE
+static void test_bounded_deflate() {
+	for (const bool gzip : {false, true}) {
+		for (const auto &[name, original] : sample_inputs()) {
+			(void)name;
+			DeflateCompressData compressor(original.data(), original.size(), gzip);
+			std::string compressed;
+			for (auto it = compressor.begin(); it; ++it) compressed.append(*it);
+			assert(decompress_deflate(compressed, original.size(), gzip) == original);
+			DeflateDecompressData decoder(compressed.data(), compressed.size(), gzip, original.size());
+			std::string result;
+			for (auto it = decoder.begin(); it; ++it) {
+				assert(it.size() <= DEFLATE_BLOCK_SIZE);
+				result.append(*it);
+			}
+			assert(result == original);
+			if (!original.empty()) {
+				DeflateDecompressData limited(compressed.data(), compressed.size(), gzip, 0);
+				for (int attempt = 0; attempt != 2; ++attempt) {
+					bool rejected = false;
+					try { for (auto it = limited.begin(); it; ++it) {} }
+					catch (const DeflateException &) { rejected = true; }
+					assert(rejected);
+					limited.reset(compressed.data(), compressed.size(), gzip);
+				}
+			}
+			const auto rejects = [&](std::string_view bytes, size_t bound) {
+				bool rejected = false;
+				try { (void)decompress_deflate(bytes, bound, gzip); }
+				catch (const DeflateException &) { rejected = true; }
+				assert(rejected);
+			};
+			if (!original.empty()) rejects(compressed, original.size() - 1);
+			rejects(compressed + "trailing", original.size());
+			if (gzip) {
+				assert(decompress_deflate(compressed + compressed, original.size() * 2, true) == original + original);
+				if (!original.empty()) rejects(compressed + compressed, original.size() * 2 - 1);
+			} else rejects(compressed + compressed, original.size() * 2);
+			for (size_t removed = 1; removed <= std::min<size_t>(compressed.size(), 16); ++removed)
+				rejects(std::string_view(compressed).substr(0, compressed.size() - removed), original.size());
+			auto corrupt = compressed;
+			corrupt.back() ^= 1;
+			rejects(corrupt, original.size());
+			decoder.reset(compressed.data(), compressed.size(), gzip, original.size());
+			result.clear();
+			for (auto it = decoder.begin(); it; ++it) result.append(*it);
+			assert(result == original);
+		}
+	}
+	std::puts("bounded deflate/gzip output, chunks, truncation, checksum, trailing data and reset passed");
+}
+#endif
+
 int main() {
 	std::printf("compressors round-trip test\n\n");
 
 	// Each backend built, and its on-disk round trips through the fd-streaming *File
 	// classes (deflate and lz4; zstd has none), which also leave a borrowed fd open.
 #if COMPRESSORS_TEST_DEFLATE
+	test_bounded_deflate();
 	test_backend("deflate",
 		[](std::string_view s) { return compress_deflate(s); },
 		[](std::string_view s) { return decompress_deflate(s); });

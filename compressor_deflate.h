@@ -39,6 +39,7 @@
 #include <cstring>               // for memcpy
 #include <iterator>              // for std::input_iterator_tag
 #include <memory>                // for std::unique_ptr
+#include <limits>
 #include <string>                // for std::string
 #include <string_view>           // for std::string_view
 #include <vector>                // for std::vector
@@ -250,11 +251,16 @@ public:
 class DeflateDecompressData : public DeflateData, public DeflateBlockStreaming<DeflateDecompressData> {
 	std::string init();
 	std::string next();
+	size_t maximum_output;
+	size_t output_size = 0;
+	bool finished = false;
+	bool member_finished = false;
 
 	friend class DeflateBlockStreaming<DeflateDecompressData>;
 
 public:
-	DeflateDecompressData(const char* data_=nullptr, size_t data_size_=0, bool gzip_=false);
+	DeflateDecompressData(const char* data_=nullptr, size_t data_size_=0, bool gzip_=false,
+		size_t maximum_output_=std::numeric_limits<size_t>::max());
 
 	~DeflateDecompressData();
 
@@ -263,6 +269,10 @@ public:
 		stream = 0;
 		data_offset = 0;
 		add_data(data_, data_size_);
+	}
+	void reset(const char* data_, size_t data_size_, bool gzip_, size_t maximum_output_) {
+		reset(data_, data_size_, gzip_);
+		maximum_output = maximum_output_;
 	}
 };
 
@@ -415,12 +425,18 @@ compress_deflate(std::string_view uncompressed)
 
 
 inline std::string
-decompress_deflate(std::string_view compressed)
+decompress_deflate(std::string_view compressed, size_t maximum_output, bool gzip=false)
 {
 	std::string decompressed;
-	DeflateDecompressData decompressor(compressed.data(), compressed.size());
+	DeflateDecompressData decompressor(compressed.data(), compressed.size(), gzip, maximum_output);
 	for (auto it = decompressor.begin(); it; ++it) {
 		decompressed.append(*it);
 	}
 	return decompressed;
+}
+
+inline std::string
+decompress_deflate(std::string_view compressed)
+{
+	return decompress_deflate(compressed, std::numeric_limits<size_t>::max());
 }
