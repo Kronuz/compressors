@@ -154,7 +154,10 @@ public:
 		}
 
 		bool operator==(const iterator& other) const noexcept {
-			return current_str == other.current_str;
+			const bool active = static_cast<bool>(*this);
+			const bool other_active = static_cast<bool>(other);
+			if (!active || !other_active) return active == other_active;
+			return obj == other.obj && current_str == other.current_str;
 		}
 
 		bool operator!=(const iterator& other) const noexcept {
@@ -162,7 +165,7 @@ public:
 		}
 
 		explicit operator bool() const noexcept {
-			return obj->state != DeflateState::END;
+			return obj && obj->state != DeflateState::END;
 		}
 
 		size_t read(char* buf, size_t buf_size) {
@@ -187,7 +190,7 @@ public:
 	}
 
 	iterator end() {
-		return iterator(this, std::string());
+		return iterator();
 	}
 };
 

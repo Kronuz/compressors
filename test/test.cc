@@ -334,6 +334,30 @@ static void test_bounded_deflate() {
 			assert(result == original);
 		}
 	}
+	for (const bool gzip : {false, true}) {
+		const std::string original(2 * 1024 * 1024, 'x');
+		DeflateCompressData reference(original.data(), original.size(), gzip);
+		std::string expected;
+		for (auto it = reference.begin(); it; ++it) expected.append(*it);
+		DeflateCompressData compressor(original.data(), original.size(), gzip);
+		std::string compressed;
+		for (const auto &block : compressor) compressed.append(block);
+		assert(compressed == expected);
+		DeflateDecompressData decoder(compressed.data(), compressed.size(), gzip);
+		std::string restored;
+		for (const auto &block : decoder) restored.append(block);
+		assert(restored == original);
+		if (gzip) {
+			DeflateCompressData empty("", 0, true);
+			std::string members;
+			for (auto it = empty.begin(); it; ++it) members.append(*it);
+			members += compressed;
+			DeflateDecompressData joined(members.data(), members.size(), true);
+			restored.clear();
+			for (const auto &block : joined) restored.append(block);
+			assert(restored == original);
+		}
+	}
 	std::puts("bounded deflate/gzip output, chunks, truncation, checksum, trailing data and reset passed");
 }
 #endif

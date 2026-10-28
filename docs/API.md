@@ -127,3 +127,5 @@ cmake -B build -DCMAKE_PREFIX_PATH="$(brew --prefix)"
   platform, such as strata's segment fixtures, turns it on.
 - `COMPRESSORS_LZ4_PINNED` (`OFF`) does the same for LZ4, building its pinned release
   (`v1.10.0`, the static library only) instead of the system's.
+
+Deflate streaming iterators support both explicit boolean iteration and range iteration. Empty intermediate output is valid and does not end the stream; the end sentinel represents exhausted state. Concatenated gzip streams can include empty members.
