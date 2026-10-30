@@ -1,12 +1,14 @@
 // libFuzzer target for the LZ4 decoders.
 //
-// Input: [u8 mode][u8 a][u8 b] then bytes.
-//   - mode&3 == 0: the bytes as a block stream, through LZ4DecompressData and LZ4DecompressFile.
-//     Each either decodes or throws LZ4Exception; the two agree on the outcome and the bytes.
-//   - mode&3 == 1: the bytes as one raw block into a buffer of a*256+b bytes (never out of bounds).
-//   - mode&3 == 2: the bytes compressed and decompressed come back equal.
-//   - mode&3 == 3: the same, with one byte of the compressed stream XORed (a picks the position
-//     among the first 64 bytes, b the mask): the stream decodes or throws LZ4Exception.
+// Input: [u8 mode][u8 a][u8 b] then bytes; mode % 5 picks the case.
+//   - 0: the bytes as a block stream, through LZ4DecompressData and LZ4DecompressFile. Each either
+//     decodes or throws LZ4Exception; the two agree on the outcome and the bytes.
+//   - 1: the bytes as one raw block into a buffer of a*256+b bytes (never out of bounds).
+//   - 2: the bytes compressed and decompressed come back equal.
+//   - 3: the same, with one byte of the compressed stream XORed (a picks the position among the
+//     first 64 bytes, b the mask): the stream decodes or throws LZ4Exception.
+//   - 4: a stream of one record whose declared length is a*256+b and whose body is the bytes
+//     cycled to that length, so the length field and the data it covers are independent inputs.
 #include "compressor_lz4.h"
 
 #include "fuzz_util.h"
@@ -48,7 +50,7 @@ static Decoded by_file(std::string_view in) {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 	if (size < 3 || size > (1u << 16)) { return 0; }
-	const unsigned mode = data[0] & 3, a = data[1], b = data[2];
+	const unsigned mode = data[0] % 5, a = data[1], b = data[2];
 	const std::string_view rest(reinterpret_cast<const char*>(data) + 3, size - 3);
 
 	switch (mode) {
@@ -61,6 +63,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 		case 1: {
 			std::string out(a * 256u + b, '\0');
 			(void)decompress_lz4_block(rest, out.data(), out.size());
+			break;
+		}
+		case 4: {
+			const uint16_t declared = static_cast<uint16_t>(a * 256u + b);
+			std::string stream(reinterpret_cast<const char*>(&declared), sizeof(declared));
+			for (size_t i = 0; !rest.empty() && i < declared; ++i) { stream += rest[i % rest.size()]; }
+			const Decoded x = by_data(stream), y = by_file(stream);
+			FUZZ_CHECK(x.ok == y.ok);
+			if (x.ok) { FUZZ_CHECK(x.bytes == y.bytes && x.digest == y.digest); }
 			break;
 		}
 		default: {
