@@ -101,6 +101,12 @@ ZstdDecompressData::init()
 		THROW(ZstdCorruptVolume, "zstd frame does not record its content size");
 	}
 
+	// A 128 KiB block is at best a 4-byte run, so a frame cannot hold more than 32768 bytes per
+	// compressed byte; a header claiming more is damaged and must not size an allocation.
+	if (content_size / 32768 > data_size) {
+		THROW(ZstdCorruptVolume, "zstd frame claims more content than it can hold");
+	}
+
 	std::string result;
 	result.resize(static_cast<size_t>(content_size));
 
@@ -128,7 +134,8 @@ std::string
 decompress_zstd(std::string_view compressed, std::size_t max_size)
 {
 	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
-	if (content_size == ZSTD_CONTENTSIZE_ERROR || content_size == ZSTD_CONTENTSIZE_UNKNOWN || content_size > max_size) {
+	if (content_size == ZSTD_CONTENTSIZE_ERROR || content_size == ZSTD_CONTENTSIZE_UNKNOWN || content_size > max_size ||
+	    content_size / 32768 > compressed.size()) {
 		THROW(ZstdCorruptVolume, "zstd frame is invalid or larger than allowed");
 	}
 	std::string result(static_cast<size_t>(content_size), '\0');

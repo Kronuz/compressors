@@ -148,6 +148,35 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     COMPRESSORS_TEST_LZ4=$<BOOL:${COMPRESSORS_LZ4}>
     COMPRESSORS_TEST_ZSTD=$<BOOL:${COMPRESSORS_ZSTD}>)
   add_test(NAME compressors COMMAND compressors_test)
+
+  # Damaged compressed input: every decoder decodes it or throws its own error.
+  add_executable(compressors_corrupt_test test/test_corrupt.cc)
+  target_link_libraries(compressors_corrupt_test PRIVATE compressors)
+  target_compile_definitions(compressors_corrupt_test PRIVATE
+    COMPRESSORS_TEST_DEFLATE=$<BOOL:${COMPRESSORS_DEFLATE}>
+    COMPRESSORS_TEST_LZ4=$<BOOL:${COMPRESSORS_LZ4}>
+    COMPRESSORS_TEST_ZSTD=$<BOOL:${COMPRESSORS_ZSTD}>)
+  add_test(NAME compressors_corrupt COMMAND compressors_corrupt_test)
+
+  # libFuzzer targets, one per decoder (Clang): cmake -DCOMPRESSORS_FUZZ=ON -DCMAKE_CXX_COMPILER=clang++
+  # Without it a replay driver runs the seed corpus and generated inputs through the same checks as a test.
+  option(COMPRESSORS_FUZZ "Build the libFuzzer targets" OFF)
+  foreach(codec lz4 zstd deflate)
+    string(TOUPPER ${codec} CODEC_UPPER)
+    if(COMPRESSORS_${CODEC_UPPER})
+      if(COMPRESSORS_FUZZ)
+        add_executable(compressors_fuzz_${codec} fuzz/fuzz_${codec}.cc)
+        target_link_libraries(compressors_fuzz_${codec} PRIVATE compressors)
+        target_compile_options(compressors_fuzz_${codec} PRIVATE -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all)
+        target_link_options(compressors_fuzz_${codec} PRIVATE -fsanitize=fuzzer,address,undefined)
+      else()
+        add_executable(compressors_fuzz_${codec}_replay fuzz/fuzz_${codec}.cc fuzz/replay.cc)
+        target_link_libraries(compressors_fuzz_${codec}_replay PRIVATE compressors)
+        add_test(NAME compressors_fuzz_${codec}_replay
+          COMMAND compressors_fuzz_${codec}_replay ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/${codec})
+      endif()
+    endif()
+  endforeach()
 endif()
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND COMPRESSORS_DEFLATE AND COMPRESSORS_LZ4 AND COMPRESSORS_ZSTD)
 

@@ -32,6 +32,8 @@ std::string zerr(int ret) {
 			return "there is an error reading or writing the files";
 		case Z_STREAM_ERROR:
 			return "invalid compression level";
+		case Z_NEED_DICT:
+			return "the stream needs a preset dictionary";
 		case Z_DATA_ERROR:
 			return "invalid or incomplete deflate data";
 		case Z_MEM_ERROR:
@@ -228,7 +230,7 @@ DeflateDecompressData::next()
 		strm.avail_out = DEFLATE_BLOCK_SIZE;
 		strm.next_out = reinterpret_cast<Bytef*>(&buffer[0]);
 		stream = inflate(&strm, Z_NO_FLUSH);
-		if (stream < 0 && stream != Z_BUF_ERROR) {
+		if ((stream < 0 && stream != Z_BUF_ERROR) || stream == Z_NEED_DICT) {
 			THROW(DeflateException, zerr(stream));
 		}
 		auto bytes_decompressed = DEFLATE_BLOCK_SIZE - strm.avail_out;
@@ -417,7 +419,7 @@ DeflateDecompressFile::next()
 		strm.avail_out = DEFLATE_BLOCK_SIZE;
 		strm.next_out = reinterpret_cast<Bytef*>(&buffer[0]);
 		stream = inflate(&strm, Z_NO_FLUSH);
-		if (stream < 0 && stream != Z_BUF_ERROR) {
+		if ((stream < 0 && stream != Z_BUF_ERROR) || stream == Z_NEED_DICT) {
 			THROW(DeflateException, zerr(stream));
 		}
 		auto bytes_decompressed = DEFLATE_BLOCK_SIZE - strm.avail_out;

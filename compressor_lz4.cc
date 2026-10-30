@@ -169,7 +169,8 @@ LZ4DecompressData::next()
 	read_uint16(data + data_offset, &cmpBytes);
 	data_offset += sizeof(uint16_t);
 
-	if (cmpBytes > data_size - data_offset) {
+	// A block never compresses to more than cmpBuf_size bytes.
+	if (cmpBytes > cmpBuf_size || cmpBytes > data_size - data_offset) {
 		THROW(LZ4CorruptVolume, "Data is corrupt");
 	}
 
@@ -179,7 +180,7 @@ LZ4DecompressData::next()
 	char* const decPtr = &buffer[_offset];
 	const int decBytes = LZ4_decompress_safe_continue(lz4StreamDecode, &cmpBuf[0], decPtr, cmpBytes, LZ4_BLOCK_SIZE);
 	if (decBytes <= 0) {
-		THROW(LZ4Exception, "LZ4_decompress_safe_continue failed!");
+		THROW(LZ4CorruptVolume, "LZ4_decompress_safe_continue failed!");
 	}
 
 	// Add and wraparound the ringbuffer offset
@@ -349,6 +350,11 @@ LZ4DecompressFile::next()
 		data_offset += sizeof(uint16_t);
 	}
 
+	// A block never compresses to more than cmpBuf_size bytes.
+	if (cmpBytes > cmpBuf_size) {
+		THROW(LZ4CorruptVolume, "File is corrupt");
+	}
+
 	res_size = data_size - data_offset;
 	if (cmpBytes > res_size) {
 		read_partial_bin(data + data_offset, &cmpBuf[0], res_size);
@@ -365,7 +371,7 @@ LZ4DecompressFile::next()
 	char* const decPtr = &buffer[_offset];
 	const int decBytes = LZ4_decompress_safe_continue(lz4StreamDecode, &cmpBuf[0], decPtr, cmpBytes, LZ4_BLOCK_SIZE);
 	if (decBytes <= 0) {
-		THROW(LZ4Exception, "LZ4_decompress_safe_continue failed!");
+		THROW(LZ4CorruptVolume, "LZ4_decompress_safe_continue failed!");
 	}
 
 	// Add and wraparound the ringbuffer offset
