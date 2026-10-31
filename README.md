@@ -71,6 +71,20 @@ int main() {
 [`examples/roundtrip.cc`](examples/roundtrip.cc) shows codec dispatch, block
 streaming, and edge inputs.
 
+## ⚡ Performance notes
+
+- `compress_lz4` / `decompress_lz4` write the same bytes as the block-streaming classes but
+  skip their machinery: no zero-filled 256 KB ring per call, no per-block string, no digest.
+  The first 256 KB of a stream is contiguous in the classes' ring, so it is compressed from
+  (decompressed into) the caller's buffer directly; past that the ring wraps, which changes
+  what LZ4 sees as its dictionary, so the rest goes through a ring as before. On an Apple M-series
+  host: 256 B compress 4x and decompress 20-50x faster, 1 MB random 1.4-1.6x and 3.4x, text 1.0-1.5x.
+- `XXH32` keeps its four lanes in scalar registers on AArch64 (the compiler otherwise packs
+  them into a NEON vector, whose longer multiply latency halves the speed). Same digests,
+  upstream speed (about 12 GB/s).
+- `cmake -DCOMPRESSORS_BENCH=ON` builds `bench/` (the XXH32 comparison fetches upstream xxHash,
+  for the benchmark only).
+
 ## 🎯 When to use it
 
 - ✅ Compressing records, pages, or messages in memory, with the codec chosen per

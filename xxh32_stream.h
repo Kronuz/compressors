@@ -76,6 +76,12 @@ inline uint32_t round(uint32_t acc, uint32_t input) noexcept {
 	acc += input * PRIME32_2;
 	acc = rotl32(acc, 13);
 	acc *= PRIME32_1;
+#if defined(__aarch64__) && (defined(__clang__) || defined(__GNUC__))
+	// Keeps the four lanes in scalar registers. Left alone, the compiler packs them into
+	// one NEON vector, whose multiply has a longer latency than the scalar one, and the
+	// dependency chain through each lane (not the throughput) then sets the speed: 2x slower.
+	__asm__("" : "+r"(acc));
+#endif
 	return acc;
 }
 

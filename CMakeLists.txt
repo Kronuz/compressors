@@ -158,6 +158,31 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     COMPRESSORS_TEST_ZSTD=$<BOOL:${COMPRESSORS_ZSTD}>)
   add_test(NAME compressors_corrupt COMMAND compressors_corrupt_test)
 
+  # The one-shot lz4 helpers against the stream classes: identical bytes, identical verdicts.
+  if(COMPRESSORS_LZ4)
+    add_executable(compressors_lz4_oneshot_test test/test_lz4_oneshot.cc)
+    target_link_libraries(compressors_lz4_oneshot_test PRIVATE compressors Threads::Threads)
+    add_test(NAME compressors_lz4_oneshot COMMAND compressors_lz4_oneshot_test)
+  endif()
+
+  # Benchmarks (not built by default): cmake -DCOMPRESSORS_BENCH=ON. The XXH32 one compares with
+  # upstream xxHash, fetched here only; the library never depends on it.
+  option(COMPRESSORS_BENCH "Build the benchmarks" OFF)
+  if(COMPRESSORS_BENCH)
+    if(COMPRESSORS_LZ4)
+      add_executable(compressors_bench_lz4 bench/bench_lz4.cc)
+      target_link_libraries(compressors_bench_lz4 PRIVATE compressors)
+    endif()
+    FetchContent_Declare(xxhash_upstream GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git GIT_TAG v0.8.3)
+    FetchContent_GetProperties(xxhash_upstream)
+    if(NOT xxhash_upstream_POPULATED)
+      FetchContent_Populate(xxhash_upstream)
+    endif()
+    add_executable(compressors_bench_xxh32 bench/bench_xxh32.cc)
+    target_link_libraries(compressors_bench_xxh32 PRIVATE compressors)
+    target_include_directories(compressors_bench_xxh32 PRIVATE "${xxhash_upstream_SOURCE_DIR}")
+  endif()
+
   # libFuzzer targets, one per decoder (Clang): cmake -DCOMPRESSORS_FUZZ=ON -DCMAKE_CXX_COMPILER=clang++
   # Without it a replay driver runs the seed corpus and generated inputs through the same checks as a test.
   option(COMPRESSORS_FUZZ "Build the libFuzzer targets" OFF)

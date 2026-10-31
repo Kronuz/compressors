@@ -437,28 +437,12 @@ public:
 };
 
 
-inline std::string
-compress_lz4(std::string_view uncompressed)
-{
-	std::string compressed;
-	LZ4CompressData compressor(uncompressed.data(), uncompressed.size());
-	for (auto it = compressor.begin(); it; ++it) {
-		compressed.append(*it);
-	}
-	return compressed;
-}
-
-
-inline std::string
-decompress_lz4(std::string_view compressed)
-{
-	std::string decompressed;
-	LZ4DecompressData decompressor(compressed.data(), compressed.size());
-	for (auto it = decompressor.begin(); it; ++it) {
-		decompressed.append(*it);
-	}
-	return decompressed;
-}
+// One-shot helpers over the framed, dependent-block stream the classes above produce (2-byte
+// block length, then the block; 2 KB blocks). They emit and accept exactly the classes' bytes
+// but run without the class machinery: no ring-buffer allocation per call, no per-block
+// strings, no digest. See compressor_lz4.cc.
+std::string compress_lz4(std::string_view uncompressed);
+std::string decompress_lz4(std::string_view compressed);
 
 
 // One-shot LZ4 blocks: the raw LZ4 block format, no framing, for a caller that records

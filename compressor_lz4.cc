@@ -27,6 +27,9 @@
 #include <cstdio>                // for SEEK_SET
 #include <cstdlib>               // for malloc, free
 #include <cstring>               // for size_t, memcpy
+#include <algorithm>             // for min
+#include <memory>                // for unique_ptr
+#include <new>                   // for bad_alloc
 
 #include "likely.h"              // for likely, unlikely
 
@@ -424,4 +427,200 @@ decompress_lz4_block(std::string_view src, char* dst, std::size_t dst_size) noex
 	}
 	const int n = LZ4_decompress_safe(src.data(), dst, static_cast<int>(src.size()), static_cast<int>(dst_size));
 	return n >= 0 && static_cast<std::size_t>(n) == dst_size;
+}
+
+
+// --- One-shot helpers -------------------------------------------------------------------
+//
+// compress_lz4 / decompress_lz4 produce and accept the byte stream of LZ4CompressData /
+// LZ4DecompressData, which runs the LZ4 streaming API over a ring buffer. LZ4's output
+// depends on where each block sits relative to the previous ones (contiguous blocks use the
+// prefix mode, a block after the ring wraps uses the external-dictionary mode), so the
+// helpers keep that layout:
+//   - the first LZ4_RING_BUFFER_BYTES - LZ4_BLOCK_SIZE (256 KB) of data is contiguous in the
+//     ring, so it is compressed from (decompressed into) the caller's buffer directly;
+//   - past that the ring wraps; the rest goes through a ring buffer exactly as the classes do.
+// There is no digest, no per-block string and no zero-filled ring.
+
+namespace {
+
+constexpr size_t wrap_size = LZ4_RING_BUFFER_BYTES - LZ4_BLOCK_SIZE;
+constexpr size_t cmp_capacity = LZ4_COMPRESSBOUND(LZ4_BLOCK_SIZE);
+
+// Above this the decompressor's worst-case output estimate is not trusted; the stream class
+// (which grows as it goes) decodes instead.
+constexpr size_t max_estimate = size_t(64) << 20;
+
+// Scratch memory that is not zero-filled: a small stack buffer, else a per-thread buffer
+// kept for reuse (up to 1 MB), else a one-off heap block.
+class Scratch {
+	static constexpr size_t kept = size_t(1) << 20;
+	alignas(16) char small[4096];
+	std::unique_ptr<char[]> big;
+	struct Cache {
+		std::unique_ptr<char[]> p;
+		size_t size = 0;
+	};
+	static Cache& cache() {
+		thread_local Cache c;
+		return c;
+	}
+	char* ptr;
+
+public:
+	explicit Scratch(size_t n) {
+		if (n <= sizeof(small)) {
+			ptr = small;
+		} else if (n <= kept) {
+			auto& c = cache();
+			if (c.size < n) {
+				c.p.reset(new char[n]);
+				c.size = n;
+			}
+			ptr = c.p.get();
+		} else {
+			big.reset(new char[n]);
+			ptr = big.get();
+		}
+	}
+	char* data() noexcept { return ptr; }
+};
+
+struct EncoderState {
+	LZ4_stream_t* p = LZ4_createStream();
+	~EncoderState() { LZ4_freeStream(p); }
+};
+
+}  // namespace
+
+
+std::string
+compress_lz4(std::string_view uncompressed)
+{
+	const size_t n = uncompressed.size();
+	if (n == 0) {
+		return std::string();
+	}
+	const size_t blocks = (n + LZ4_BLOCK_SIZE - 1) / LZ4_BLOCK_SIZE;
+	Scratch out(blocks * (sizeof(uint16_t) + cmp_capacity));
+	char* o = out.data();
+
+	thread_local EncoderState enc;
+	if (!enc.p) {
+		throw std::bad_alloc();
+	}
+	LZ4_resetStream(enc.p);  // a fresh table: the bytes must not depend on earlier calls
+
+	auto block = [&](const char* src, size_t len) {
+		const int cmpBytes = LZ4_compress_fast_continue(enc.p, src, o + sizeof(uint16_t), static_cast<int>(len), static_cast<int>(cmp_capacity), 1);
+		if (cmpBytes <= 0) {
+			THROW(LZ4Exception, "LZ4_compress_fast_continue failed!");
+		}
+		const auto num_bytes = static_cast<uint16_t>(cmpBytes);
+		memcpy(o, &num_bytes, sizeof(uint16_t));
+		o += sizeof(uint16_t) + cmpBytes;
+	};
+
+	size_t off = 0;
+	const char* const in = uncompressed.data();
+	while (off < n && off < wrap_size) {
+		const size_t len = std::min(LZ4_BLOCK_SIZE, n - off);
+		block(in + off, len);
+		off += len;
+	}
+	if (off < n) {
+		std::unique_ptr<char[]> ring(new char[LZ4_RING_BUFFER_BYTES]);
+		size_t roff = 0;
+		while (off < n) {
+			const size_t len = std::min(LZ4_BLOCK_SIZE, n - off);
+			memcpy(&ring[roff], in + off, len);
+			block(&ring[roff], len);
+			off += len;
+			roff += len;
+			if (roff >= wrap_size) {
+				roff = 0;
+			}
+		}
+	}
+	return std::string(out.data(), static_cast<size_t>(o - out.data()));
+}
+
+
+std::string
+decompress_lz4(std::string_view compressed)
+{
+	const size_t size = compressed.size();
+	const char* const in = compressed.data();
+
+	// Walk the block headers: how many blocks, and whether the framing ends badly. The
+	// decoded size of a block is at most LZ4_BLOCK_SIZE, which bounds the output.
+	size_t pos = 0;
+	size_t blocks = 0;
+	bool framing_error = false;
+	while (pos < size) {
+		if (size - pos < sizeof(uint16_t)) {
+			framing_error = true;
+			break;
+		}
+		uint16_t cmpBytes;
+		memcpy(&cmpBytes, in + pos, sizeof(uint16_t));
+		if (cmpBytes > cmp_capacity || cmpBytes > size - pos - sizeof(uint16_t)) {
+			framing_error = true;
+			break;
+		}
+		pos += sizeof(uint16_t) + cmpBytes;
+		++blocks;
+	}
+	if (blocks > max_estimate / LZ4_BLOCK_SIZE) {
+		std::string decompressed;
+		LZ4DecompressData decompressor(in, size);
+		for (auto it = decompressor.begin(); it; ++it) {
+			decompressed.append(*it);
+		}
+		return decompressed;
+	}
+
+	Scratch scratch(blocks * LZ4_BLOCK_SIZE);
+	char* const out = scratch.data();
+	size_t total = 0;
+
+	LZ4_streamDecode_t sd;
+	LZ4_setStreamDecode(&sd, nullptr, 0);
+
+	auto decode = [&](const char* src, size_t len, char* dst) {
+		const int decBytes = LZ4_decompress_safe_continue(&sd, src, dst, static_cast<int>(len), static_cast<int>(LZ4_BLOCK_SIZE));
+		if (decBytes <= 0) {
+			THROW(LZ4CorruptVolume, "LZ4_decompress_safe_continue failed!");
+		}
+		return static_cast<size_t>(decBytes);
+	};
+
+	pos = 0;
+	size_t b = 0;
+	for (; b < blocks && total < wrap_size; ++b) {
+		uint16_t cmpBytes;
+		memcpy(&cmpBytes, in + pos, sizeof(uint16_t));
+		total += decode(in + pos + sizeof(uint16_t), cmpBytes, out + total);
+		pos += sizeof(uint16_t) + cmpBytes;
+	}
+	if (b < blocks) {
+		std::unique_ptr<char[]> ring(new char[LZ4_RING_BUFFER_BYTES]);
+		size_t roff = 0;
+		for (; b < blocks; ++b) {
+			uint16_t cmpBytes;
+			memcpy(&cmpBytes, in + pos, sizeof(uint16_t));
+			const size_t dec = decode(in + pos + sizeof(uint16_t), cmpBytes, &ring[roff]);
+			memcpy(out + total, &ring[roff], dec);
+			total += dec;
+			pos += sizeof(uint16_t) + cmpBytes;
+			roff += dec;
+			if (roff >= wrap_size) {
+				roff = 0;
+			}
+		}
+	}
+	if (framing_error) {
+		THROW(LZ4CorruptVolume, "Data is corrupt");
+	}
+	return std::string(out, total);
 }
