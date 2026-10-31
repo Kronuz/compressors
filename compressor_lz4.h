@@ -25,7 +25,7 @@
 
 // Buffer-core LZ4 compressor. Extracted from Xapiand. Both the in-memory *Data
 // classes and the fd-streaming LZ4CompressFile / LZ4DecompressFile classes are
-// included here. The *File classes no longer depend on Xapiand's io.hh /
+// included here. The *File classes do not depend on Xapiand's io.hh /
 // opts.h: they use the library's own EINTR-safe open/close/read/lseek helpers
 // in compressors::detail (compressor_io.h).
 //

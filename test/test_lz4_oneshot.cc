@@ -213,10 +213,9 @@ int main() {
 		CHECK(a.first == b.first && a.second == b.second);
 	}
 
-	// Untrusted headers do not size allocations. 32768 three-byte blocks (98 KB) used to make
-	// decompress_lz4 reserve blocks * 2 KB = 64 MB up front. Oracle: the stream class decodes
-	// the same input (to the same bytes, or the same rejection); the allocation bound is the
-	// decoded size plus constant buffers, not a multiple of the block count.
+	// Untrusted headers do not size allocations: 32768 three-byte blocks (98 KB) stay under 1 MB.
+	// Oracle: the stream class decodes the same input (to the same bytes, or the same rejection);
+	// the allocation bound is the decoded size plus constant buffers, whatever the block count.
 	{
 		std::string valid;   // each block: header 1, token 0x10 (one literal) 'a'+i: decodes to one byte
 		std::string expect_bytes;
@@ -243,8 +242,7 @@ int main() {
 		CHECK(!new_decompress(valid).first && new_decompress(zero_len).first && new_decompress(torn).first);
 	}
 
-	// A large valid stream (the old code switched to the stream class above 64 MB of
-	// estimated output): same bytes in and out, the allocations growing with the data.
+	// A large valid stream (70 MB): same bytes in and out, the allocations growing with the data.
 	{
 		std::string big = text(70u << 20);
 		std::string c = compress_lz4(big);

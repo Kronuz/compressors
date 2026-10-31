@@ -21,7 +21,8 @@ LICENSE                       MIT, Copyright (c) 2015-2019 Dubalu LLC.
 README.md                     What it is, install, quick start.
 docs/API.md                   The backends and formats, the interface, dependency discovery, build options.
 docs/compressors.d2           The README diagram's source (docs/compressors.svg is rendered from it).
-ARCHITECTURE.md               CRTP base, buffer-core vs fd-streaming split, per-backend specifics, vendored utils, decoupling.
+ARCHITECTURE.md               CRTP base, buffer-core vs fd-streaming split, per-backend specifics, vendored utils, differences from Xapiand.
+CHANGELOG.md                  Behavior changes, newest first, with their measurements.
 ```
 
 The library is three `.cc` files compiled into `libcompressors.a`. The headers
@@ -126,8 +127,8 @@ drop a block or corrupt a round-trip rather than fail to compile.
 The deflate and lz4 backends are extracted from
 [Xapiand](https://github.com/Kronuz/Xapiand) (`compressor_deflate.{h,cc}`,
 `compressor_lz4.{h,cc}`), keeping both the CRTP buffer-core and the fd-streaming
-`*File` classes. The `*File` classes were decoupled from Xapiand's `io.hh` onto the
-library's own `compressor_io.h` helpers, so they ship standalone. The
+`*File` classes. The `*File` classes use the library's own `compressor_io.h`
+helpers in place of Xapiand's `io.hh`, so they ship standalone. The
 **zstd backend is new** and has no upstream counterpart. Keep buffer-core edits
 minimal and reconcilable with upstream; the zstd backend is free to evolve here.
-See `ARCHITECTURE.md` for the full decoupling.
+See `ARCHITECTURE.md` for the differences from upstream.

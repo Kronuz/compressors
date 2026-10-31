@@ -1,9 +1,8 @@
 # Architecture
 
 This document describes the internals of `compressors`: the CRTP block-streaming
-base each backend shares, the buffer-core vs fd-streaming split that drove the
-extraction, the per-backend specifics, and the decoupling done to lift the code
-out of Xapiand.
+base each backend shares, the buffer-core and fd-streaming families, the
+per-backend specifics, and how the code differs from its Xapiand origin.
 
 ## Overview
 
@@ -11,7 +10,7 @@ There are three backends, one per file pair:
 
 - `compressor_deflate.{h,cc}` — zlib deflate/inflate.
 - `compressor_lz4.{h,cc}` — lz4 ring-buffer streaming.
-- `compressor_zstd.{h,cc}` — Zstandard one-shot frame (the new backend).
+- `compressor_zstd.{h,cc}` — Zstandard one-shot frame (no Xapiand counterpart).
 
 Each is built the same way: a CRTP base `<Backend>BlockStreaming<Impl>` provides
 a block iterator, a `<Backend>Data` base holds the input buffer pointer, and two
@@ -69,9 +68,8 @@ In Xapiand each header carried **two** leaf families on the same CRTP base:
   dependency.
 
 Both families ship here for deflate and lz4 (zstd is buffer-only). The fd-streaming
-classes were decoupled from Xapiand: the `#include "io.hh"` was replaced by the
-library's own `compressor_io.h` (the `compressors::detail` open/close/read/lseek
-helpers), and they take a plain `std::string` / fd rather than Xapiand's IO types.
+classes include the library's own `compressor_io.h` (the `compressors::detail`
+open/close/read/lseek helpers) and take a plain `std::string` / fd.
 `test/test.cc` round-trips a `*CompressFile` / `*DecompressFile` pair on disk,
 including the path that adopts a caller-owned fd.
 
@@ -97,7 +95,7 @@ bytes]`, which the decompressor reads back to size each block. The leaf owns an
 the bytes and exposed via `get_digest()`; it is **auxiliary** — not embedded in
 the stream, not needed for a round-trip.
 
-### zstd (`compressor_zstd.cc`) — the new backend
+### zstd (`compressor_zstd.cc`)
 
 Zstandard's simple API (`ZSTD_compress` / `ZSTD_decompress`) already operates on
 a whole in-memory buffer, which is exactly the buffer-core contract, so this
@@ -108,22 +106,20 @@ the decompress path recovers the exact original length from the frame header via
 `ZSTD_getFrameContentSize` (the frames `ZSTD_compress` writes always record it).
 
 The one place this backend differs structurally from deflate/lz4 is that the
-whole payload is one block, which makes the iterator contract above easy to get
-wrong: the first cut ended the stream inside `init()`, so the single block was
-dropped by the driving loop and decompress saw empty input. The fix is to leave
-`state` at `INIT` after `init()` produces the block and flip it to `END` only in
-the subsequent `next()`. With that, the iterator yields the block, then
-terminates, matching deflate/lz4.
+whole payload is one block. `init()` produces the block and leaves `state` at
+`INIT`; the following `next()` flips it to `END`. So the iterator yields the
+block, then terminates, matching deflate/lz4. Ending the stream inside `init()`
+makes the driving loop drop the single block, and decompress sees empty input.
 
 ## Vendored utilities
 
-Three small headers were vendored so the library is self-contained, each keeping
-its license/attribution:
+Three small vendored headers keep the library self-contained, each with its
+license/attribution:
 
 - **`exception.h`** — Xapiand throws compressor errors with
   `THROW(SomeException, "fmt", ...)`, where the exceptions derive from `Error`,
   which derives from a located `BaseException` that records function/file/line.
-  That full machinery now lives in the standalone
+  That full machinery lives in the standalone
   [located-exception](https://github.com/Kronuz/located-exception) library, which
   needs its own `.cc` and CMake target. The compressors only ever throw on a
   backend failure and read `.what()`; they never inspect the located fields. So
@@ -131,16 +127,15 @@ its license/attribution:
   records the call site for diagnostics) plus the `THROW` macro spelled exactly as
   the Xapiand call sites expect, using `std::format` for interpolation. No
   external dependency, same call-site spelling.
-- **`likely.h`** — the `likely()` / `unlikely()` branch hints, vendored verbatim
-  from the threadpool extraction's self-contained copy (it detects
+- **`likely.h`** — the `likely()` / `unlikely()` branch hints, verbatim from
+  threadpool's self-contained copy (it detects
   `__builtin_expect` via `__has_builtin`, no `config.h`). Only the macro-guard
   prefix is renamed to `COMPRESSORS_*`.
 - **`xxh32_stream.h`** — a minimal, self-contained XXH32 streaming implementation
   (`XXH32_state_t`, `XXH32_reset` / `XXH32_update` / `XXH32_digest`) for lz4's
-  `get_digest()`. Xapiand pulled in the full xxHash distribution; since the digest
-  is a non-load-bearing auxiliary checksum, vendoring only the XXH32 surface
-  (canonical algorithm, so digests match upstream) avoids adding a fourth
-  third-party dependency. Carries the upstream BSD-2-Clause header.
+  `get_digest()`. The digest is a non-load-bearing auxiliary checksum, so
+  vendoring only the XXH32 surface (canonical algorithm, so digests match
+  upstream) avoids a fourth third-party dependency. Carries the upstream BSD-2-Clause header.
 
 ## Third-party discovery (CMake)
 
@@ -162,17 +157,17 @@ via FetchContent do not build it.
 
 ## Standalone vs. Xapiand
 
-This is a partial extraction: the buffer-core of `compressor_deflate` and
-`compressor_lz4` from [Xapiand](https://github.com/Kronuz/Xapiand), plus a new
-zstd backend. The decoupling was:
+The buffer-core and fd-streaming classes of `compressor_deflate` and
+`compressor_lz4` come from [Xapiand](https://github.com/Kronuz/Xapiand). They
+differ from upstream in four places:
 
-1. Drop the `*File` fd-streaming classes and their `io.hh` / `fcntl.h` /
-   `stringified.hh` includes (they depend on Xapiand's `opts.h`).
-2. Replace the `exception.h` that wraps located-exception with a trimmed
-   header-only `Error` + `THROW`.
-3. Vendor `likely.h` and `xxh32_stream.h` self-contained.
-4. Modernize the iterators off the removed `std::iterator` base.
+1. The `*File` classes include `compressor_io.h` in place of Xapiand's `io.hh`,
+   `opts.h`, and `stringified.hh`.
+2. `exception.h` is a trimmed header-only `Error` + `THROW` in place of the one
+   that wraps located-exception.
+3. `likely.h` and `xxh32_stream.h` are self-contained.
+4. The iterators do not derive from the removed `std::iterator` base.
 
-Changes to the buffer-core logic itself were kept minimal so they can be
-reconciled with upstream Xapiand. The zstd backend has no upstream counterpart;
-it is new code in the same shape.
+The buffer-core logic otherwise stays close to upstream so the two can be
+reconciled. The zstd backend has no upstream counterpart; it is new code in the
+same shape.

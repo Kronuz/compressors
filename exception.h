@@ -27,7 +27,7 @@
 //
 // Xapiand throws its compressor failures through THROW(SomeException, "fmt", ...)
 // where the exception derives from Error, which in turn derives from a located
-// BaseException that records function/file/line. That full machinery now lives
+// BaseException that records function/file/line. That full machinery lives
 // in the standalone located-exception library
 // (github.com/Kronuz/located-exception) and needs its own .cc + CMake target.
 //

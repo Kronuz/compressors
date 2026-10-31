@@ -25,7 +25,7 @@
 
 // Buffer-core deflate (zlib) compressor. Extracted from Xapiand. Both the
 // in-memory *Data classes and the fd-streaming DeflateCompressFile /
-// DeflateDecompressFile classes are included here. The *File classes no longer
+// DeflateDecompressFile classes are included here. The *File classes do not
 // depend on Xapiand's io.hh / opts.h: they use the library's own EINTR-safe
 // open/close/read/lseek helpers in the compressors::detail namespace below.
 //

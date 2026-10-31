@@ -1,6 +1,5 @@
-// One-shot lz4: compress_lz4 / decompress_lz4 against the stream classes they replace (the
-// old implementation of the one-shots) and against raw LZ4 blocks (a different, unframed
-// format; a floor, not an equivalent). Prints the best of several runs per case.
+// One-shot lz4: compress_lz4 / decompress_lz4 against the stream classes (same bytes) and
+// against raw LZ4 blocks (a different, unframed format, so a floor to compare with). Prints the best of several runs per case.
 #include <chrono>
 #include <cstdio>
 #include <random>

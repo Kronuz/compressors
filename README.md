@@ -71,24 +71,22 @@ int main() {
 [`examples/roundtrip.cc`](examples/roundtrip.cc) shows codec dispatch, block
 streaming, and edge inputs.
 
-## ⚡ Performance notes
+## ⚡ Performance
 
-- `compress_lz4` / `decompress_lz4` write the same bytes as the block-streaming classes but
-  skip their machinery: no zero-filled 256 KB ring per call, no per-block string, no digest.
-  The first 256 KB of a stream is contiguous in the classes' ring, so it is compressed from
-  (decompressed into) the caller's buffer directly; past that the ring wraps, which changes
-  what LZ4 sees as its dictionary, so the rest goes through a ring as before. On an Apple M-series
-  host: 256 B compress 4x and decompress 20-50x faster, 1 MB random 1.4-1.6x and 3.4x, text 1.0-1.5x.
+- `compress_lz4` / `decompress_lz4` write the same bytes as the block-streaming classes
+  without their per-call machinery: no zero-filled 256 KB ring, no per-block string, no
+  digest. The first 256 KB of a stream is compressed from (decompressed into) the caller's
+  buffer directly. Past 256 KB the classes' ring wraps, which changes what LZ4 sees as its
+  dictionary, so the rest of the stream goes through a ring too.
 - `decompress_lz4` sizes its buffers by what the blocks decode to, never by what the
-  headers claim: the contiguous phase uses at most 256 KB, and the output after the ring wraps
-  grows from a reservation of 16 times the input. A hostile 98 KB stream of 3-byte blocks used to
-  reserve 64 MB before decoding anything; it now allocates under 1 MB. Bytes and the accept/reject
-  verdict for every stream are unchanged (checked against the stream classes).
+  headers claim. The contiguous phase uses at most 256 KB, and the output after the ring
+  wraps grows from a reservation of 16 times the input. A hostile 98 KB stream of 3-byte
+  blocks allocates under 1 MB.
 - `XXH32` keeps its four lanes in scalar registers on AArch64 (the compiler otherwise packs
-  them into a NEON vector, whose longer multiply latency halves the speed). Same digests,
-  upstream speed (about 12 GB/s).
-- `cmake -DCOMPRESSORS_BENCH=ON` builds `bench/` (the XXH32 comparison fetches upstream xxHash,
-  for the benchmark only).
+  them into a NEON vector, whose longer multiply latency halves the speed). It runs at
+  upstream xxHash speed, about 12 GB/s on an Apple M-series host.
+- `cmake -DCOMPRESSORS_BENCH=ON` builds `compressors_bench_lz4` and `compressors_bench_xxh32`
+  from `bench/` (the XXH32 comparison fetches upstream xxHash, for the benchmark only).
 
 ## 🎯 When to use it
 
@@ -104,6 +102,7 @@ streaming, and edge inputs.
 - [ARCHITECTURE.md](ARCHITECTURE.md): the CRTP block-streaming bases and the
   buffer and fd families.
 - [AGENTS.md](AGENTS.md): repository map and conventions.
+- [CHANGELOG.md](CHANGELOG.md): behavior changes and their measurements.
 
 ## 🛠️ Building and testing
 
@@ -121,4 +120,4 @@ pass on every platform.
 
 MIT, Copyright (c) 2015-2019 Dubalu LLC. See [LICENSE](LICENSE). The vendored
 `xxh32_stream.h` carries its own BSD 2-Clause license (Yann Collet). Extracted
-from [Xapiand](https://github.com/Kronuz/Xapiand); the zstd backend is new.
+from [Xapiand](https://github.com/Kronuz/Xapiand); the zstd backend has no Xapiand counterpart.
