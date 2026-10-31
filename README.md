@@ -79,6 +79,11 @@ streaming, and edge inputs.
   (decompressed into) the caller's buffer directly; past that the ring wraps, which changes
   what LZ4 sees as its dictionary, so the rest goes through a ring as before. On an Apple M-series
   host: 256 B compress 4x and decompress 20-50x faster, 1 MB random 1.4-1.6x and 3.4x, text 1.0-1.5x.
+- `decompress_lz4` sizes its buffers by what the blocks decode to, never by what the
+  headers claim: the contiguous phase uses at most 256 KB, and the output after the ring wraps
+  grows from a reservation of 16 times the input. A hostile 98 KB stream of 3-byte blocks used to
+  reserve 64 MB before decoding anything; it now allocates under 1 MB. Bytes and the accept/reject
+  verdict for every stream are unchanged (checked against the stream classes).
 - `XXH32` keeps its four lanes in scalar registers on AArch64 (the compiler otherwise packs
   them into a NEON vector, whose longer multiply latency halves the speed). Same digests,
   upstream speed (about 12 GB/s).

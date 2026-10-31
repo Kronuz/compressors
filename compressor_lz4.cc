@@ -447,9 +447,16 @@ namespace {
 constexpr size_t wrap_size = LZ4_RING_BUFFER_BYTES - LZ4_BLOCK_SIZE;
 constexpr size_t cmp_capacity = LZ4_COMPRESSBOUND(LZ4_BLOCK_SIZE);
 
-// Above this the decompressor's worst-case output estimate is not trusted; the stream class
-// (which grows as it goes) decodes instead.
-constexpr size_t max_estimate = size_t(64) << 20;
+// The contiguous phase of a stream (blocks decoded straight into one buffer) ends once the
+// output reaches wrap_size, so it never needs more than this.
+constexpr size_t contiguous_capacity = wrap_size + LZ4_BLOCK_SIZE;
+
+// The up-front reservation for the part of the output that follows the contiguous phase is
+// a multiple of the compressed size, not the header-derived worst case (block count times
+// LZ4_BLOCK_SIZE): the headers are attacker-controlled, and 3 bytes of header per block
+// would otherwise reserve 2 KB each. Output past the reservation grows by doubling, so
+// memory follows what the blocks actually decode to.
+constexpr size_t reserve_ratio = 16;
 
 // Scratch memory that is not zero-filled: a small stack buffer, else a per-thread buffer
 // kept for reuse (up to 1 MB), else a one-off heap block.
@@ -571,16 +578,7 @@ decompress_lz4(std::string_view compressed)
 		pos += sizeof(uint16_t) + cmpBytes;
 		++blocks;
 	}
-	if (blocks > max_estimate / LZ4_BLOCK_SIZE) {
-		std::string decompressed;
-		LZ4DecompressData decompressor(in, size);
-		for (auto it = decompressor.begin(); it; ++it) {
-			decompressed.append(*it);
-		}
-		return decompressed;
-	}
-
-	Scratch scratch(blocks * LZ4_BLOCK_SIZE);
+	Scratch scratch(std::min(blocks * LZ4_BLOCK_SIZE, contiguous_capacity));
 	char* const out = scratch.data();
 	size_t total = 0;
 
@@ -603,15 +601,17 @@ decompress_lz4(std::string_view compressed)
 		total += decode(in + pos + sizeof(uint16_t), cmpBytes, out + total);
 		pos += sizeof(uint16_t) + cmpBytes;
 	}
+	std::string spill;   // the output once the ring wraps; empty for streams that never do
 	if (b < blocks) {
+		spill.reserve(std::max(total, std::min(blocks * LZ4_BLOCK_SIZE, size * reserve_ratio)));
+		spill.append(out, total);
 		std::unique_ptr<char[]> ring(new char[LZ4_RING_BUFFER_BYTES]);
 		size_t roff = 0;
 		for (; b < blocks; ++b) {
 			uint16_t cmpBytes;
 			memcpy(&cmpBytes, in + pos, sizeof(uint16_t));
 			const size_t dec = decode(in + pos + sizeof(uint16_t), cmpBytes, &ring[roff]);
-			memcpy(out + total, &ring[roff], dec);
-			total += dec;
+			spill.append(&ring[roff], dec);
 			pos += sizeof(uint16_t) + cmpBytes;
 			roff += dec;
 			if (roff >= wrap_size) {
@@ -621,6 +621,9 @@ decompress_lz4(std::string_view compressed)
 	}
 	if (framing_error) {
 		THROW(LZ4CorruptVolume, "Data is corrupt");
+	}
+	if (!spill.empty()) {
+		return spill;
 	}
 	return std::string(out, total);
 }

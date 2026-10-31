@@ -11,7 +11,38 @@
 #include <thread>
 #include <vector>
 
+#include <atomic>
+#include <new>
+
 #include "compressor_lz4.h"
+
+// The largest single allocation since the counter was reset: decompress_lz4 must size its
+// buffers by what the blocks decode to, not by what the headers claim. (TSan's runtime
+// defines operator new itself, so the allocation checks are skipped under it.)
+static std::atomic<std::size_t> g_largest_alloc{0};
+#if defined(__SANITIZE_THREAD__)
+#  define ONESHOT_TSAN 1
+#elif defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define ONESHOT_TSAN 1
+#  endif
+#endif
+#ifndef ONESHOT_TSAN
+static void note_alloc(std::size_t n) {
+	std::size_t seen = g_largest_alloc.load(std::memory_order_relaxed);
+	while (n > seen && !g_largest_alloc.compare_exchange_weak(seen, n, std::memory_order_relaxed)) { }
+}
+void* operator new(std::size_t n) {
+	note_alloc(n);
+	if (void* p = std::malloc(n ? n : 1)) { return p; }
+	throw std::bad_alloc();
+}
+void* operator new[](std::size_t n) { return operator new(n); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+#endif
 
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #c); std::abort(); } } while (0)
 
@@ -180,6 +211,48 @@ int main() {
 		auto a = ref_decompress(c);
 		auto b = new_decompress(c);
 		CHECK(a.first == b.first && a.second == b.second);
+	}
+
+	// Untrusted headers do not size allocations. 32768 three-byte blocks (98 KB) used to make
+	// decompress_lz4 reserve blocks * 2 KB = 64 MB up front. Oracle: the stream class decodes
+	// the same input (to the same bytes, or the same rejection); the allocation bound is the
+	// decoded size plus constant buffers, not a multiple of the block count.
+	{
+		std::string valid;   // each block: header 1, token 0x10 (one literal) 'a'+i: decodes to one byte
+		std::string expect_bytes;
+		for (int i = 0; i < 32768; ++i) {
+			valid.push_back(2); valid.push_back(0);
+			valid.push_back('\x10'); valid.push_back(static_cast<char>('a' + i % 26));
+			expect_bytes.push_back(static_cast<char>('a' + i % 26));
+		}
+		std::string zero_len;   // block of one zero byte: decodes to nothing, rejected
+		for (int i = 0; i < 32768; ++i) { zero_len.push_back(1); zero_len.push_back(0); zero_len.push_back(0); }
+		std::string torn = valid;   // valid blocks, then a header claiming more than is left
+		torn.push_back(static_cast<char>(0xff)); torn.push_back(static_cast<char>(0x7f));
+
+		for (const std::string* hostile : {&valid, &zero_len, &torn}) {
+			g_largest_alloc.store(0);
+			auto b = new_decompress(*hostile);
+#ifndef ONESHOT_TSAN
+			CHECK(g_largest_alloc.load() <= (1u << 20));
+#endif
+			auto a = ref_decompress(*hostile);
+			CHECK(a.first == b.first && a.second == b.second);
+		}
+		CHECK(new_decompress(valid).second == expect_bytes);
+		CHECK(!new_decompress(valid).first && new_decompress(zero_len).first && new_decompress(torn).first);
+	}
+
+	// A large valid stream (the old code switched to the stream class above 64 MB of
+	// estimated output): same bytes in and out, the allocations growing with the data.
+	{
+		std::string big = text(70u << 20);
+		std::string c = compress_lz4(big);
+		g_largest_alloc.store(0);
+		CHECK(decompress_lz4(c) == big);
+#ifndef ONESHOT_TSAN
+		CHECK(g_largest_alloc.load() <= 2 * big.size() + (1u << 20));
+#endif
 	}
 
 	// Threads share nothing: concurrent calls give the same bytes.
