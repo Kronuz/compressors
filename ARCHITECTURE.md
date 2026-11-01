@@ -103,6 +103,15 @@ bytes]`, which the decompressor reads back to size each block. The leaf owns an
 the bytes and exposed via `get_digest()`; it is **auxiliary** — not embedded in
 the stream, not needed for a round-trip.
 
+`compress_lz4` and `decompress_lz4` write the same bytes as the stream classes with
+their own loop: no zero-filled 256 KB ring, no per-block string and no digest. The
+first 256 KB of a stream is compressed from, or decompressed into, the caller's buffer
+directly. Past 256 KB the classes' ring wraps, which changes what LZ4 sees as its
+dictionary, so the rest of the stream goes through a ring too. `decompress_lz4` sizes
+its buffers by what the blocks decode to, never by what the headers claim: the
+contiguous phase uses at most 256 KB, and the output after the ring wraps grows from a
+reservation of 16 times the input.
+
 ### zstd (`compressor_zstd.cc`)
 
 Zstandard's simple API (`ZSTD_compress` / `ZSTD_decompress`) already operates on

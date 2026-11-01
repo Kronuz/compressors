@@ -6,133 +6,146 @@ Part of [Kronuz C++ Libraries](https://github.com/Kronuz/cpp-libraries), a colle
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 
-Compression for C++20 with three interchangeable backends, deflate (zlib), LZ4,
-and Zstandard, behind one shape: `compress_zstd(bytes)`, and swap the name to
-switch codecs. For storage and network layers that want a codec choice without
-three different APIs.
-
-![compressors: your bytes through deflate, lz4, or zstd, with file-descriptor streaming for deflate and lz4](docs/compressors.svg)
+Compression library for C++20: deflate, LZ4 and zstd behind one function shape, with fd
+streaming for deflate and LZ4. `compress_zstd(bytes)` returns a string, and swapping the name
+switches the codec. Reach for it in storage and network layers that want a codec choice
+without three different APIs.
 
 ## ✨ Highlights
 
-- **One shape, three codecs.** `compress_<backend>` and `decompress_<backend>`
-  take a `std::string_view` and return a `std::string`.
-- **Block streaming.** Iterate the compressed output block by block, and reuse a
-  compressor's buffers with `reset()`.
-- **File descriptors.** deflate and LZ4 stream to and from fds with EINTR-safe
-  I/O.
-- **Safe on hostile input.** `decompress_zstd(bytes, max_size)` refuses frames
-  that claim more than `max_size`.
-- **Blocks into your buffer.** `compress_lz4_block` and `compress_zstd_into` (and
-  their decoders, bounded by the exact size) write one block into a buffer you own,
-  with per-thread contexts: no allocation per block. `compress_zstd`,
-  `decompress_zstd` and `decompress_deflate` return their result with one allocation, and
-  `decompress_zstd(compressed, out)` decodes into a string you keep from record to record.
-- **Reproducible bytes.** `COMPRESSORS_ZSTD_PINNED` and `COMPRESSORS_LZ4_PINNED`
-  build pinned releases, so output is byte-identical on every platform.
-- **Finds or fetches its dependencies.** zlib from the system; LZ4 and zstd from
-  the system or fetched.
-
-## 📦 Installation
-
-Requires a C++20 compiler, CMake 3.14 or newer, and zlib; LZ4 and zstd are used
-from the system when found and fetched otherwise. On macOS, pass
-`-DCMAKE_PREFIX_PATH="$(brew --prefix)"` so CMake finds Homebrew's packages. CI
-builds it on Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus
-ASan, UBSan, and TSan builds.
-
-```cmake
-include(FetchContent)
-FetchContent_Declare(compressors
-  GIT_REPOSITORY https://github.com/Kronuz/compressors.git
-  GIT_TAG        main)
-FetchContent_MakeAvailable(compressors)
-
-target_link_libraries(my_app PRIVATE compressors::compressors)
-```
+- **One shape, three codecs.** `compress_<codec>` and `decompress_<codec>` take a
+  `std::string_view` and return a `std::string`.
+- **One allocation per call.** `compress_zstd`, `decompress_zstd` and `decompress_deflate` run
+  on the thread's reused contexts and scratch memory, and `decompress_zstd(compressed, out)`
+  decodes into a string you keep from record to record.
+- **Blocks into your buffer.** `compress_lz4_block` and `compress_zstd_into`, and their
+  decoders, write one block into a buffer you own and allocate nothing per block.
+- **Safe on hostile input.** `decompress_zstd(bytes, max_size)` refuses frames that claim more
+  than `max_size`, and `decompress_lz4` sizes its buffers by what the blocks decode to, so a
+  hostile 98 KB stream allocates under 1 MB.
+- **Streams and file descriptors.** Iterate the compressed output block by block, reuse a
+  compressor's buffers with `reset()`, and stream deflate and LZ4 to and from file descriptors
+  with EINTR-safe I/O.
+- **Reproducible bytes.** `COMPRESSORS_ZSTD_PINNED` and `COMPRESSORS_LZ4_PINNED` build pinned
+  releases, so output is byte-identical on every platform.
+- **Finds or fetches its dependencies.** zlib comes from the system; LZ4 and zstd from the
+  system when CMake finds them, and from a pinned release otherwise.
 
 ## 🚀 Quick start
 
 ```cpp
-#include "compressor_zstd.h"
 #include "compressor_lz4.h"
+#include "compressor_zstd.h"
 
-#include <cassert>
+#include <cstdio>
 #include <string>
 
 int main() {
 	std::string payload(100'000, 'x');
 
-	std::string packed = compress_zstd(payload);                  // or compress_lz4, compress_deflate
-	assert(decompress_zstd(packed, payload.size()) == payload);   // bounded for untrusted input
+	std::string packed = compress_zstd(payload);                   // or compress_lz4, compress_deflate
+	std::string back = decompress_zstd(packed, payload.size());    // bounded for untrusted input
+	std::puts(back == payload ? "zstd round trip" : "mismatch");    // zstd round trip
 
-	assert(decompress_lz4(compress_lz4(payload)) == payload);
+	back = decompress_lz4(compress_lz4(payload));
+	std::puts(back == payload ? "lz4 round trip" : "mismatch");     // lz4 round trip
 }
 ```
 
-[`examples/roundtrip.cc`](examples/roundtrip.cc) shows codec dispatch, block
-streaming, and edge inputs.
+[`examples/roundtrip.cc`](examples/roundtrip.cc) shows codec dispatch, block streaming and
+edge inputs.
 
-## ⚡ Performance
+## 📦 Installation
 
-- `compress_lz4` / `decompress_lz4` write the same bytes as the block-streaming classes
-  without their per-call machinery: no zero-filled 256 KB ring, no per-block string, no
-  digest. The first 256 KB of a stream is compressed from (decompressed into) the caller's
-  buffer directly. Past 256 KB the classes' ring wraps, which changes what LZ4 sees as its
-  dictionary, so the rest of the stream goes through a ring too.
-- `decompress_lz4` sizes its buffers by what the blocks decode to, never by what the
-  headers claim. The contiguous phase uses at most 256 KB, and the output after the ring
-  wraps grows from a reservation of 16 times the input. A hostile 98 KB stream of 3-byte
-  blocks allocates under 1 MB.
-- `compress_zstd`, `decompress_zstd` and `decompress_deflate` write the same bytes as the
-  block-streaming classes without their per-call machinery. The zstd functions run on the
-  thread's reused contexts (the ones `compress_zstd_into` uses): `compress_zstd` compresses
-  into scratch memory and copies out exactly the frame, `decompress_zstd` decodes straight
-  into the string it returns. `decompress_deflate` decodes into a stack block, or into the
-  result when the output is larger than one 16 KB block. Each returns its result with one
-  allocation. A 256-byte record takes about 0.6 us to compress and 0.03 us to decompress with
-  zstd, against 1.8 us and 1.1 us for `ZSTD_compress` and `ZSTD_decompress` (which create a
-  context per call), and `decompress_deflate` is within 10% of zlib's `uncompress` from 256 B
-  to 1 MB (Linux x86_64, `compressors_bench_oneshot`).
-- `XXH32` keeps its four lanes in scalar registers on AArch64 and on x86 (SSE2), where the
-  compiler otherwise packs them into one vector and the longer multiply latency, not the
-  throughput, sets the speed. It runs at upstream xxHash speed on both (1.0 to 1.2x of
-  `XXH32` in `compressors_bench_xxh32`, about 12 GB/s on an Apple M-series host and on a
-  Linux x86_64 runner with g++), and its digest is the same on every host byte order.
-- `cmake -DCOMPRESSORS_BENCH=ON` builds `compressors_bench_lz4`, `compressors_bench_oneshot`
-  and `compressors_bench_xxh32` from `bench/` (the XXH32 comparison fetches upstream xxHash,
-  for the benchmark only).
+Requires a C++20 compiler, CMake 3.14 or newer, and zlib. CMake uses the system's LZ4 and zstd
+when it finds them and fetches pinned releases (LZ4 1.10.0, zstd 1.5.7) otherwise; on macOS,
+pass `-DCMAKE_PREFIX_PATH="$(brew --prefix)"` so it finds Homebrew's packages. CI builds it on
+Linux (x86_64, arm64), macOS (arm64, x86_64), and FreeBSD, plus ASan, UBSan, and TSan builds.
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(compressors
+  GIT_REPOSITORY https://github.com/Kronuz/compressors.git
+  GIT_TAG        fe0e7127512ac14c57e9083733dcd48d2b701de8)  # main tracks the tip
+FetchContent_MakeAvailable(compressors)
+
+target_link_libraries(my_app PRIVATE compressors::compressors)
+```
+
+Then `#include "compressor_zstd.h"`, `"compressor_lz4.h"` or `"compressor_deflate.h"`.
 
 ## 🎯 When to use it
 
-- ✅ Compressing records, pages, or messages in memory, with the codec chosen per
-  use: zstd for ratio, LZ4 for speed, deflate for gzip interop.
-- ❌ Reading `.zst` or `.lz4` files from other tools: the LZ4 backend uses its own
-  record framing, and only zstd writes a standard frame.
+Use it to compress records, pages or messages in memory, with the codec chosen per use: zstd
+for ratio, LZ4 for speed, deflate for gzip interop.
+
+Not for:
+
+- Files written by other tools: the LZ4 backend uses its own record framing, and
+  `decompress_zstd` needs frames that record their content size, which a `.zst` streamed
+  from a pipe may not.
+- Streaming zstd: only deflate and LZ4 stream to and from file descriptors; zstd works on
+  whole in-memory buffers.
+- Untrusted zstd input through the one-argument `decompress_zstd`: it allocates the size the
+  frame claims, up to 32,768 times the frame's own size. Pass `max_size` instead.
+
+## ⚡ Performance
+
+Nanoseconds per call on random input, from `compressors_bench_oneshot` (best of 15, Apple
+clang 17, `-O3`). The comparator is the codec's own one-call API from the same zstd and zlib
+the library links (`ZSTD_compress`, `ZSTD_decompress`, zlib's `uncompress`); the benchmark
+writes its output into a reused buffer, so its rows include no allocation.
+
+| Call | M4 Pro | M4 Pro, codec's call | i9-9980HK | i9-9980HK, codec's call |
+|---|---:|---:|---:|---:|
+| `compress_zstd`, 256 B | 621 | 695 | 1,901 | 2,043 |
+| `compress_zstd`, 64 KB | 8,833 | 9,458 | 20,530 | 24,709 |
+| `decompress_zstd`, 256 B | 51 | 91 | 228 | 240 |
+| `decompress_deflate`, 256 B | 108 | 54 | 269 | 131 |
+| `decompress_deflate`, 1 MB | 75,500 | 68,625 | 102,797 | 84,366 |
+
+The machines are an Apple M4 Pro and an Intel Core i9-9980HK. The vendored XXH32 that checks
+LZ4 streams runs at upstream xxHash 0.8.3's speed (124 µs per MiB against 121 on the i9-9980HK,
+`compressors_bench_xxh32`).
+
+```sh
+cmake -S . -B build -DCOMPRESSORS_BENCH=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+build/compressors_bench_oneshot
+```
 
 ## 📚 Documentation
 
-- [docs/API.md](docs/API.md): the three backends and their formats, the interface,
-  how dependencies are found, and the build options.
-- [ARCHITECTURE.md](ARCHITECTURE.md): the CRTP block-streaming bases and the
+- [docs/API.md](docs/API.md): the three backends and their formats, the interface, the
+  block calls, how dependencies are found, and the build options.
+- [ARCHITECTURE.md](ARCHITECTURE.md): the CRTP block-streaming bases, the one-shots, and the
   buffer and fd families.
+- [CHANGELOG.md](CHANGELOG.md): changes by date, with their measurements.
 - [AGENTS.md](AGENTS.md): repository map and conventions.
-- [CHANGELOG.md](CHANGELOG.md): behavior changes and their measurements.
+- [Catalog entry](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#compressors):
+  include lines, target, dependencies and key API.
 
 ## 🛠️ Building and testing
 
 ```sh
-cmake -B build -DCMAKE_PREFIX_PATH="$(brew --prefix)"   # the prefix path on macOS only
-cmake --build build && ctest --test-dir build
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build
 ```
+
+On macOS add `-DCMAKE_PREFIX_PATH="$(brew --prefix)"` to the configure line.
+`-DCOMPRESSORS_BENCH=ON` builds the benchmarks (the XXH32 one fetches upstream xxHash for
+the benchmark only), and `-DCOMPRESSORS_FUZZ=ON` the libFuzzer targets (Clang).
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome. Read [AGENTS.md](AGENTS.md) first. CI must
-pass on every platform.
+Read [AGENTS.md](AGENTS.md) and the catalog's
+[rules of engagement](https://github.com/Kronuz/cpp-libraries/blob/main/AGENTS.md#rules-of-engagement)
+before opening a pull request; CI must pass on every platform.
 
 ## 📄 License
 
-MIT, Copyright (c) 2015-2019 Dubalu LLC. See [LICENSE](LICENSE). The vendored
-`xxh32_stream.h` carries its own BSD 2-Clause license (Yann Collet). Extracted
-from [Xapiand](https://github.com/Kronuz/Xapiand); the zstd backend has no Xapiand counterpart.
+MIT, Copyright (c) 2026 Germán Méndez Bravo and (c) 2015-2020 Dubalu LLC. See
+[LICENSE](LICENSE). The vendored `xxh32_stream.h` carries its own BSD 2-Clause license (Yann
+Collet). Derived from [Xapiand](https://github.com/Kronuz/Xapiand)'s compressors; the zstd
+backend is this library's own.

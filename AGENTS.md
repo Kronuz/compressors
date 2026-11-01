@@ -21,10 +21,9 @@ test/test_lz4_oneshot.cc      compress/decompress_lz4 against the stream classes
 test/test_oneshot.cc          compress/decompress_zstd and _deflate against the stream classes: bytes, verdicts on damaged input, allocation budget. CTest `compressors_oneshot`.
 test/test_xxh32.cc            XXH32 against published values and a reference, on the native and an emulated big-endian host. CTest `compressors_xxh32`.
 CMakeLists.txt                STATIC library compressors + alias compressors::compressors; zlib/lz4/zstd discovery; top-level-only test.
-LICENSE                       MIT, Copyright (c) 2015-2019 Dubalu LLC.
+LICENSE                       MIT, Copyright (c) 2026 Germán Méndez Bravo and (c) 2015-2020 Dubalu LLC.
 README.md                     What it is, install, quick start.
 docs/API.md                   The backends and formats, the interface, dependency discovery, build options.
-docs/compressors.d2           The README diagram's source (docs/compressors.svg is rendered from it).
 ARCHITECTURE.md               CRTP base, buffer-core vs fd-streaming split, per-backend specifics, vendored utils, differences from Xapiand.
 CHANGELOG.md                  Behavior changes, newest first, with their measurements.
 ```
