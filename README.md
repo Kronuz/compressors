@@ -25,7 +25,8 @@ three different APIs.
   that claim more than `max_size`.
 - **Blocks into your buffer.** `compress_lz4_block` and `compress_zstd_into` (and
   their decoders, bounded by the exact size) write one block into a buffer you own,
-  with per-thread contexts: no allocation per block.
+  with per-thread contexts: no allocation per block. `compress_zstd`,
+  `decompress_zstd` and `decompress_deflate` return their result with one allocation.
 - **Reproducible bytes.** `COMPRESSORS_ZSTD_PINNED` and `COMPRESSORS_LZ4_PINNED`
   build pinned releases, so output is byte-identical on every platform.
 - **Finds or fetches its dependencies.** zlib from the system; LZ4 and zstd from
@@ -82,11 +83,24 @@ streaming, and edge inputs.
   headers claim. The contiguous phase uses at most 256 KB, and the output after the ring
   wraps grows from a reservation of 16 times the input. A hostile 98 KB stream of 3-byte
   blocks allocates under 1 MB.
-- `XXH32` keeps its four lanes in scalar registers on AArch64 (the compiler otherwise packs
-  them into a NEON vector, whose longer multiply latency halves the speed). It runs at
-  upstream xxHash speed, about 12 GB/s on an Apple M-series host.
-- `cmake -DCOMPRESSORS_BENCH=ON` builds `compressors_bench_lz4` and `compressors_bench_xxh32`
-  from `bench/` (the XXH32 comparison fetches upstream xxHash, for the benchmark only).
+- `compress_zstd`, `decompress_zstd` and `decompress_deflate` write the same bytes as the
+  block-streaming classes without their per-call machinery. The zstd functions run on the
+  thread's reused contexts (the ones `compress_zstd_into` uses): `compress_zstd` compresses
+  into scratch memory and copies out exactly the frame, `decompress_zstd` decodes straight
+  into the string it returns. `decompress_deflate` decodes into a stack block, or into the
+  result when the output is larger than one 16 KB block. Each returns its result with one
+  allocation. A 256-byte record takes about 0.6 us to compress and 0.03 us to decompress with
+  zstd, against 1.8 us and 1.1 us for `ZSTD_compress` and `ZSTD_decompress` (which create a
+  context per call), and `decompress_deflate` is within 10% of zlib's `uncompress` from 256 B
+  to 1 MB (Linux x86_64, `compressors_bench_oneshot`).
+- `XXH32` keeps its four lanes in scalar registers on AArch64 and on x86 (SSE2), where the
+  compiler otherwise packs them into one vector and the longer multiply latency, not the
+  throughput, sets the speed. It runs at upstream xxHash speed on both (1.0 to 1.2x of
+  `XXH32` in `compressors_bench_xxh32`, about 12 GB/s on an Apple M-series host and on a
+  Linux x86_64 runner with g++), and its digest is the same on every host byte order.
+- `cmake -DCOMPRESSORS_BENCH=ON` builds `compressors_bench_lz4`, `compressors_bench_oneshot`
+  and `compressors_bench_xxh32` from `bench/` (the XXH32 comparison fetches upstream xxHash,
+  for the benchmark only).
 
 ## 🎯 When to use it
 

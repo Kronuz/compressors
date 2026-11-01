@@ -7,6 +7,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `XXH32` reads its input little-endian on every host. It used to load words in host
+  order, so a big-endian host computed a different digest than upstream xxHash and than a
+  little-endian host. storage persists the digest, so volumes written by a big-endian host
+  carried checksums a little-endian host rejected. Digests on little-endian hosts are
+  unchanged. The kernel now reads through a host policy, and `test/test_xxh32.cc` runs it on
+  an emulated big-endian host against published values and a reference written from the
+  specification (it fails with the byte swap removed).
 - `decompress_lz4` sizes its buffers by the decoded data instead of the block
   headers. It used to walk the headers and reserve blocks * 2 KB up front,
   capped at 64 MB, before decoding anything: a crafted 98 KB stream of 3-byte
@@ -30,12 +37,55 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `XXH32` keeps its four lanes in scalar registers on AArch64. The compiler used
   to pack them into a NEON vector and run at half speed; it now matches upstream
   xxHash (about 12 GB/s). Digests are unchanged.
+- `XXH32` keeps its four lanes in scalar registers on x86 (SSE2) too, as upstream
+  xxHash does. On x86 clang and g++ vectorize the lanes at every level, and the
+  lane chain then sets the speed. One 1 MiB buffer fed in 2 KiB updates
+  (`compressors_bench_xxh32`, best of 25, per MiB), against upstream xxHash 0.8.3:
+  Linux x86_64, g++ 13, 501 us to 83 us (upstream 82 us); macOS x86_64, Apple
+  clang 17, 277 us to 153-171 us (139-141 us when fed in one update; upstream
+  138-141 us); both on GitHub runners. The
+  AArch64 code is instruction-identical to before and its timing is unchanged
+  (Linux arm64 g++: 110 us both; macOS arm64: 155 us both). Digests are
+  unchanged. The LZ4 stream classes, which hash every block, are faster by the
+  same factor on x86 (1 MB random compress 1.2-1.3x).
+- `compress_zstd`, `decompress_zstd` (both overloads) and `decompress_deflate` no
+  longer go through the block iterators of `ZstdCompressData`, `ZstdDecompressData`
+  and `DeflateDecompressData`. Each iterator path zero-filled a worst-case string,
+  copied the result into a second one, and paid a context per call (`ZSTD_compress`
+  and `ZSTD_decompress` create and free one) or a 16 KB zeroed buffer and a string
+  per block (deflate). The one-shots run on the thread's zstd contexts, compress
+  into scratch memory and copy out the exact frame, and decode into the result
+  directly, with one allocation. The output bytes, the decoded bytes and the
+  exceptions (type and message) are identical, checked against the classes on
+  damaged input. They are out of line now (`compress_zstd`, `decompress_zstd` and
+  `decompress_deflate` were inline in their headers). Linux x86_64, g++ 13,
+  best of 15, ns per call, old path / one-shot / the codec's own call:
+  zstd compress 256 B random 1878 / 606 / 1794, 64 KB random 10225 / 6379 / 9113,
+  1 MB random 100098 / 87961 / 79608; zstd decompress 256 B random 1190 / 32 / 1133,
+  4 KB text 4417 / 3153 / 4279, 1 MB random 36444 / 20390 / 15994; deflate
+  decompress 256 B random 240 / 116 / 106, 64 KB random 17776 / 15784 / 15022,
+  1 MB random 297503 / 251434 / 245855. On macOS x86_64 the context creation
+  costs about 13 us per call: zstd decompress of 256 B 13626 ns to 255 ns.
+  `compress_deflate` is unchanged (it is zlib's `deflateInit` per call, a tie with
+  `compress2`).
+- The per-thread scratch block the lz4 one-shots use (up to 1 MB) is shared with the
+  zstd one-shots (`compressor_scratch.h`).
+- The XXH32 kernel reads through a host policy (`NativeHost`, `EmulatedBigEndianHost`);
+  `XXH32_update` and `XXH32_digest` keep their signatures and call the native kernel.
 
 ### Added
 
 - A differential test of the one-shots against the stream classes (bytes,
   decoded bytes, and verdicts on damaged input, around the 256 KB wrap) and
   against a reference XXH32.
+- `test/test_oneshot.cc`: the zstd and deflate one-shots against the stream classes
+  (bytes, verdicts and messages on 8,400 damaged inputs per codec, thread-local
+  context reuse across sizes, four threads) and an allocation budget per call (one
+  allocation, at the result's size) that fails on the iterator paths.
+- `test/test_xxh32.cc`: XXH32 against published values and a reference, on the native
+  and an emulated big-endian host.
+- `bench/bench_oneshot.cc`: the zstd and deflate one-shots against the stream classes
+  and the codecs' own one-call APIs.
 - Benchmarks under `COMPRESSORS_BENCH`.
 
 ## 2026-10-30

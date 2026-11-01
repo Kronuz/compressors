@@ -8,14 +8,18 @@ the invariants you must not break, and the traps.
 ## Repo map
 
 ```
-compressor_deflate.h / .cc    Deflate (zlib): CRTP base + Deflate{Data,CompressData,DecompressData} (buffer) + Deflate{Compress,Decompress}File (fd-streaming) + compress/decompress_deflate.
+compressor_deflate.h / .cc    Deflate (zlib): CRTP base + Deflate{Data,CompressData,DecompressData} (buffer) + Deflate{Compress,Decompress}File (fd-streaming) + compress/decompress_deflate (decompress_deflate is its own loop in the .cc).
 compressor_lz4.h / .cc        LZ4: CRTP base + LZ4{Data,CompressData,DecompressData} (buffer) + LZ4{Compress,Decompress}File (fd-streaming) + compress/decompress_lz4. Uses xxh32_stream.h for the auxiliary digest.
-compressor_zstd.h / .cc       Zstd (the new backend): CRTP base + Zstd{Data,CompressData,DecompressData} + compress/decompress_zstd. Buffer-only (no *File).
+compressor_zstd.h / .cc       Zstd (the new backend): CRTP base + Zstd{Data,CompressData,DecompressData} + compress/decompress_zstd (one-shots on the thread's reused contexts). Buffer-only (no *File).
+compressor_scratch.h          Internal: Scratch, the not-zero-filled stack / per-thread / heap memory the one-shots use.
 compressor_io.h               The library's own EINTR-safe open/close/read/lseek helpers (compressors::detail), so the *File classes don't need Xapiand's io.hh.
 exception.h                   Vendored, trimmed: header-only Error + THROW (std::format). Replaces Xapiand's located-exception wrapper.
 likely.h                      Vendored verbatim from threadpool: self-contained likely()/unlikely().
-xxh32_stream.h                Vendored, minimal: XXH32 streaming for lz4's get_digest(), namespaced off the global xxhash API. BSD-2-Clause.
+xxh32_stream.h                Vendored, minimal: XXH32 streaming for lz4's get_digest() and storage's checksums, namespaced off the global xxhash API; the digest is the same on every host byte order. BSD-2-Clause.
 test/test.cc                  Round-trip test across all three backends (buffer), plus an on-disk *File round trip for deflate/lz4. CTest test `compressors`.
+test/test_lz4_oneshot.cc      compress/decompress_lz4 against the stream classes. CTest `compressors_lz4_oneshot`.
+test/test_oneshot.cc          compress/decompress_zstd and _deflate against the stream classes: bytes, verdicts on damaged input, allocation budget. CTest `compressors_oneshot`.
+test/test_xxh32.cc            XXH32 against published values and a reference, on the native and an emulated big-endian host. CTest `compressors_xxh32`.
 CMakeLists.txt                STATIC library compressors + alias compressors::compressors; zlib/lz4/zstd discovery; top-level-only test.
 LICENSE                       MIT, Copyright (c) 2015-2019 Dubalu LLC.
 README.md                     What it is, install, quick start.
@@ -37,10 +41,12 @@ cmake --build build
 ctest --test-dir build
 ```
 
-One CTest test, `compressors` (`test/test.cc`): it round-trips a spread of
+The CTest test `compressors` (`test/test.cc`) round-trips a spread of
 buffers through each backend and ends with `all compressors tests passed`. Run
 the binary directly (`./build/compressors_test`) to see the per-input
-compressed-size table.
+compressed-size table. `compressors_corrupt`, `compressors_lz4_oneshot`,
+`compressors_oneshot`, `compressors_xxh32`, the fuzz replays and the round-trip
+example run beside it; `-DCOMPRESSORS_BENCH=ON` adds the benchmarks.
 
 On macOS the three compression libraries are keg-only Homebrew formulae, so the
 `-DCMAKE_PREFIX_PATH="$(brew --prefix)"` is what lets `find_package`/`find_library`
@@ -99,6 +105,15 @@ drop a block or corrupt a round-trip rather than fail to compile.
 - **The lz4 XXH32 digest is auxiliary.** It is not in the stream and not part of
   the round-trip. `get_digest()` is a checksum the caller may read; do not start
   depending on it for correctness.
+- **The one-shots write the stream classes' bytes.** `compress_*` / `decompress_*` bypass the
+  stream classes for speed; the classes stay as the reference. Same bytes out, same exception type
+  and message on damaged input (`test/test_lz4_oneshot.cc`, `test/test_oneshot.cc`). A faster
+  path that changes either is a format change, not an optimization.
+- **XXH32 does not depend on the host.** storage persists the digest, so `xxh32_stream.h` reads
+  its input little-endian on every byte order (`read32_le`), and `test/test_xxh32.cc` runs the
+  kernel on an emulated big-endian host. The lane pin in `round()` is on AArch64 and on SSE2
+  targets; without it clang and gcc pack the four lanes into one vector on x86 and run 1.4-2.1x
+  slower.
 - **zstd frames carry their content size.** The decompressor uses
   `ZSTD_getFrameContentSize`, which works because `ZSTD_compress` records it. If
   you switch the compress path to a streaming API that omits the content size,

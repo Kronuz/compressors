@@ -58,6 +58,11 @@ buffer without reallocating its scratch buffers.
 size is at most `max_size` and throws otherwise, for input that may be corrupt or
 hostile: the one-argument form allocates whatever size the frame claims.
 
+`decompress_deflate` decodes a zlib stream. It stops at the stream's end, ignoring anything
+after it, and at the end of the input: a truncated stream returns the bytes decoded so far,
+and only damaged data throws `DeflateException`. Check the length or a checksum of the result
+where truncation matters.
+
 The CMake options `COMPRESSORS_DEFLATE`, `COMPRESSORS_LZ4`, and `COMPRESSORS_ZSTD`
 (all `ON`) leave a backend and its dependency out of the build.
 
@@ -86,7 +91,9 @@ bool decompress_zstd_into(std::string_view src, char* dst, std::size_t dst_size)
   one that decodes to any other size. They never read past `src` or write past `dst_size`,
   so they are safe on corrupt or hostile input.
 - The LZ4 compression state and the zstd contexts are created on a thread's first call and
-  freed when the thread ends.
+  freed when the thread ends. `compress_zstd` and `decompress_zstd` (and the bounded
+  `decompress_zstd(compressed, max_size)`) run on the same zstd contexts. The one-shots also
+  share one per-thread scratch block of up to 1 MB, kept for reuse.
 
 ## Dependencies and build options
 
