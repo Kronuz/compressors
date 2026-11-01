@@ -38,13 +38,12 @@
 // Minimal, self-contained XXH32 streaming implementation.
 //
 // The LZ4 buffer-core keeps a running XXH32 digest over the bytes it sees and
-// exposes it through LZ4BlockStreaming::get_digest(). It is an auxiliary
-// checksum: it is not embedded in the compressed stream and is not needed for a
-// round-trip (decompress(compress(x)) == x holds without it). Xapiand pulled in
-// the full xxHash distribution; here we vendor only the XXH32 reset/update/digest
-// surface the compressor calls, implementing the canonical XXH32 algorithm so
-// the digest values match upstream xxHash. This avoids adding a fourth
-// third-party dependency for a non-load-bearing checksum.
+// exposes it through LZ4BlockStreaming::get_digest(), and storage persists XXH32
+// checksums of its records. Xapiand pulled in the full xxHash distribution; here
+// we vendor only the XXH32 reset/update/digest surface, implementing the canonical
+// XXH32 algorithm so the digest of a byte sequence is the one upstream xxHash
+// computes, on every host byte order. This avoids adding a fourth third-party
+// dependency.
 
 #include <bit>         // for std::endian
 #include <cstddef>     // for size_t

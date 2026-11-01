@@ -85,6 +85,14 @@ the deflated output, ending when `data_offset` passes `data_size`. The leaf owns
 a `z_stream` and tears it down (`deflateEnd` / `inflateEnd`) in its destructor.
 Errors go through `THROW(DeflateException, zerr(stream))`.
 
+`decompress_deflate` has its own loop: an inflate stream over the whole input,
+decoded into a stack block when the output fits in one 16 KB block (a record's
+usual case, copied out at its exact size) and otherwise straight into the result,
+which starts at the input's size and doubles. It stops where the class does, at the
+stream's end (trailing bytes are ignored) or when the input is spent (a truncated
+stream returns what it decoded). `test/test_oneshot.cc` compares it with
+`DeflateDecompressData` on damaged input.
+
 ### lz4 (`compressor_lz4.cc`)
 
 Uses lz4's *streaming* API (`LZ4_compress_fast_continue` /
@@ -104,6 +112,14 @@ decompresses) the entire buffer and returns it as a single block; `next()` then
 ends the stream. The compress path sizes the output with `ZSTD_compressBound`;
 the decompress path recovers the exact original length from the frame header via
 `ZSTD_getFrameContentSize` (the frames `ZSTD_compress` writes always record it).
+
+The free functions `compress_zstd` and `decompress_zstd` do not go through the
+block iterator. They run `ZSTD_compressCCtx` and `ZSTD_decompressDCtx` on the
+thread's contexts (the ones `compress_zstd_into` uses), so no context is created
+per call, and write one result: `compress_zstd` compresses into scratch memory and
+copies out exactly the frame, `decompress_zstd` decodes into the returned string.
+They write the same bytes and throw the same exceptions as the classes, which
+`test/test_oneshot.cc` checks.
 
 The one place this backend differs structurally from deflate/lz4 is that the
 whole payload is one block. `init()` produces the block and leaves `state` at
@@ -133,9 +149,15 @@ license/attribution:
   prefix is renamed to `COMPRESSORS_*`.
 - **`xxh32_stream.h`** — a minimal, self-contained XXH32 streaming implementation
   (`XXH32_state_t`, `XXH32_reset` / `XXH32_update` / `XXH32_digest`) for lz4's
-  `get_digest()`. The digest is a non-load-bearing auxiliary checksum, so
-  vendoring only the XXH32 surface (canonical algorithm, so digests match
-  upstream) avoids a fourth third-party dependency. Carries the upstream BSD-2-Clause header.
+  `get_digest()` and for storage's record checksums. Vendoring only the XXH32 surface
+  (canonical algorithm, so digests match upstream) avoids a fourth third-party
+  dependency. The kernel reads its input through a host policy: it loads four bytes the
+  way the machine does and swaps them on a big-endian host, so the digest of a byte
+  sequence is the same on every host. The tests instantiate it with an emulated
+  big-endian host. `round()` pins the four lanes to scalar registers on AArch64 and
+  SSE2 targets, where the compiler otherwise packs them into a vector and the
+  dependency chain through each lane sets the speed. Carries the upstream BSD-2-Clause
+  header.
 
 ## Third-party discovery (CMake)
 
