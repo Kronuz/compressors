@@ -1,0 +1,521 @@
+/*
+ * Copyright © 2026 Germán Méndez Bravo (Kronuz)
+ * Copyright (c) 2015-2019 Dubalu LLC
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+#include "compressor_deflate.h"
+
+#include <algorithm>             // for min, max
+#include <cassert>               // for assert
+
+
+std::string zerr(int ret) {
+	switch (ret) {
+		case Z_ERRNO:
+			return "there is an error reading or writing the files";
+		case Z_STREAM_ERROR:
+			return "invalid compression level";
+		case Z_NEED_DICT:
+			return "the stream needs a preset dictionary";
+		case Z_DATA_ERROR:
+			return "invalid or incomplete deflate data";
+		case Z_MEM_ERROR:
+			return "memory could not be allocated for processing (out of memory)";
+		case Z_VERSION_ERROR:
+			return "zlib version mismatch!";
+		default:
+			return std::string();
+	}
+}
+
+
+int DeflateCompressData::FINISH_COMPRESS = Z_FINISH;
+
+
+/*
+ * Constructor compress with data
+ */
+DeflateCompressData::DeflateCompressData(const char* data_, size_t data_size_, bool gzip_)
+	: DeflateData(data_, data_size_),
+	  DeflateBlockStreaming(gzip_) { }
+
+
+DeflateCompressData::~DeflateCompressData()
+{
+	if (state != DeflateState::NONE) {
+		deflateEnd(&strm);
+	}
+}
+
+
+std::string
+DeflateCompressData::init()
+{
+	if (state != DeflateState::NONE) {
+		deflateEnd(&strm);
+	}
+
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+	strm.next_in = Z_NULL;
+
+	stream = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + (gzip ? 16 : 0), 8, Z_DEFAULT_STRATEGY);
+	if (stream < 0) {
+		THROW(DeflateException, zerr(stream));
+	}
+	state = DeflateState::INIT;
+
+	if (data != nullptr) {
+		if (!cmpBuf) {
+			cmpBuf = std::make_unique<char[]>(cmpBuf_size);
+		}
+		return next();
+	}
+	return std::string();
+}
+
+
+std::string
+DeflateCompressData::next(const char* input, size_t input_size, int flush)
+{
+	std::vector<char> out;
+	out.resize(input_size);
+	strm.avail_in = input_size;
+	strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input));
+
+	std::string result;
+	do {
+		strm.avail_out = input_size;
+		strm.next_out = reinterpret_cast<Bytef*>(out.data());
+		stream = deflate(&strm, flush);    // no bad return value
+		if (stream < 0) {
+			THROW(DeflateException, zerr(stream));
+		}
+		int compress_size = input_size - strm.avail_out;
+		result.append(out.data(), compress_size);
+	} while (strm.avail_out == 0);
+
+	return result;
+}
+
+
+std::string
+DeflateCompressData::next()
+{
+	assert(cmpBuf);
+
+	int flush;
+	if (data_offset > data_size) {
+		state = DeflateState::END;
+		return std::string();
+	}
+
+	if (data_offset < data_size) {
+		strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + data_offset));
+	}
+
+	auto remain_size = data_size - data_offset;
+	if (remain_size > DEFLATE_BLOCK_SIZE) {
+		strm.avail_in = DEFLATE_BLOCK_SIZE;
+		flush = Z_NO_FLUSH;
+	} else {
+		strm.avail_in = remain_size;
+		flush = Z_FINISH;
+	}
+
+	std::string result;
+	do {
+		strm.avail_out = DEFLATE_BLOCK_SIZE;
+		strm.next_out = reinterpret_cast<Bytef*>(&cmpBuf[0]);
+		stream = deflate(&strm, flush);    // no bad return value
+		int compress_size = DEFLATE_BLOCK_SIZE - strm.avail_out;
+		result.append(&cmpBuf[0], compress_size);
+	} while (strm.avail_out == 0);
+
+	data_offset += DEFLATE_BLOCK_SIZE;
+	return result;
+}
+
+
+/*
+ * Constructor decompress with data
+ */
+DeflateDecompressData::DeflateDecompressData(const char* data_, size_t data_size_, bool gzip_)
+	: DeflateData(data_, data_size_),
+	  DeflateBlockStreaming(gzip_) { }
+
+
+DeflateDecompressData::~DeflateDecompressData()
+{
+	if (state != DeflateState::NONE) {
+		inflateEnd(&strm);
+	}
+}
+
+
+std::string
+DeflateDecompressData::init()
+{
+	if (state != DeflateState::NONE) {
+		inflateEnd(&strm);
+	}
+
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+	strm.avail_in = 0;
+	strm.next_in = Z_NULL;
+
+	stream = inflateInit2(&strm, 15 + (gzip ? 16 : 0));
+	if (stream < 0) {
+		if (gzip) {
+			THROW(DeflateException, zerr(stream));
+		} else {
+			stream = inflateInit2(&strm, -15);
+			if (stream < 0) {
+				THROW(DeflateException, zerr(stream));
+			}
+		}
+	}
+	state = DeflateState::INIT;
+
+	if (!buffer) {
+		buffer = std::make_unique<char[]>(buffer_size);
+	}
+	return next();
+}
+
+
+std::string
+DeflateDecompressData::next()
+{
+	assert(buffer);
+
+	if (data_offset > data_size) {
+		state = DeflateState::END;
+		return std::string();
+	}
+
+	if (data_offset < data_size) {
+		strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data + data_offset));
+	}
+
+	auto remain_size = data_size - data_offset;
+	if (remain_size > DEFLATE_BLOCK_SIZE) {
+		strm.avail_in = DEFLATE_BLOCK_SIZE;
+	} else {
+		strm.avail_in = remain_size;
+	}
+
+	std::string result;
+	do {
+		strm.avail_out = DEFLATE_BLOCK_SIZE;
+		strm.next_out = reinterpret_cast<Bytef*>(&buffer[0]);
+		stream = inflate(&strm, Z_NO_FLUSH);
+		if ((stream < 0 && stream != Z_BUF_ERROR) || stream == Z_NEED_DICT) {
+			THROW(DeflateException, zerr(stream));
+		}
+		auto bytes_decompressed = DEFLATE_BLOCK_SIZE - strm.avail_out;
+		result.append(&buffer[0], bytes_decompressed);
+	} while (strm.avail_out == 0);
+
+	data_offset += DEFLATE_BLOCK_SIZE;
+	return result;
+}
+
+
+/*
+ * Construct for file name
+ */
+DeflateCompressFile::DeflateCompressFile(std::string_view filename, bool gzip_)
+	: DeflateFile(filename),
+	  DeflateBlockStreaming(gzip_) { }
+
+
+/*
+ * Construct for file descriptor
+ */
+DeflateCompressFile::DeflateCompressFile(int fd_, off_t fd_offset_, off_t fd_nbytes_, bool gzip_)
+	: DeflateFile(fd_, fd_offset_, fd_nbytes_),
+	  DeflateBlockStreaming(gzip_) { }
+
+
+DeflateCompressFile::~DeflateCompressFile()
+{
+	if (state != DeflateState::NONE) {
+		deflateEnd(&strm);
+	}
+}
+
+
+std::string
+DeflateCompressFile::init()
+{
+	if (state != DeflateState::NONE) {
+		deflateEnd(&strm);
+	}
+
+	if (fd_offset != -1 && compressors::detail::lseek(fd, fd_offset, SEEK_SET) != static_cast<off_t>(fd_offset)) {
+		THROW(DeflateIOError, "IO error: lseek");
+	}
+
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+
+	stream = deflateInit2(&strm, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + (gzip ? 16 : 0), 8, Z_DEFAULT_STRATEGY);
+	if (stream < 0) {
+		THROW(DeflateException, zerr(stream));
+	}
+	state = DeflateState::INIT;
+
+	compressors::detail::lseek(fd, 0, SEEK_END);
+	size_file = compressors::detail::lseek(fd, 0, SEEK_CUR);
+	compressors::detail::lseek(fd, 0, SEEK_SET);
+
+	if (!cmpBuf) {
+		cmpBuf = std::make_unique<char[]>(cmpBuf_size);
+	}
+	if (!buffer) {
+		buffer = std::make_unique<char[]>(buffer_size);
+	}
+	return next();
+}
+
+
+std::string
+DeflateCompressFile::next()
+{
+	assert(cmpBuf);
+	assert(buffer);
+
+	auto inpBytes = static_cast<int>(compressors::detail::read(fd, &buffer[0], DEFLATE_BLOCK_SIZE));
+	if (inpBytes <= 0) {
+		if (stream == Z_STREAM_END) {
+			state = DeflateState::END;
+			return std::string();
+		}
+		THROW(DeflateIOError, "IO error: read");
+	}
+	strm.avail_in = inpBytes;
+	bytes_readed+=strm.avail_in;
+
+	int flush;
+	if (bytes_readed == size_file) {
+		flush = Z_FINISH;
+	} else {
+		flush = Z_NO_FLUSH;
+	}
+
+	std::string result;
+	strm.next_in = reinterpret_cast<Bytef*>(&buffer[0]);
+	do {
+		strm.avail_out = DEFLATE_BLOCK_SIZE;
+		strm.next_out = reinterpret_cast<Bytef*>(&cmpBuf[0]);
+		stream = deflate(&strm, flush);    /* no bad return value */
+		auto bytes_compressed = DEFLATE_BLOCK_SIZE - strm.avail_out;
+		result.append(&cmpBuf[0], bytes_compressed);
+	} while (strm.avail_out == 0);
+
+	return result;
+}
+
+
+DeflateDecompressFile::DeflateDecompressFile(std::string_view filename, bool gzip_)
+	: DeflateFile(filename),
+	  DeflateBlockStreaming(gzip_) { }
+
+
+DeflateDecompressFile::DeflateDecompressFile(int fd_, off_t fd_offset_, off_t fd_nbytes_, bool gzip_)
+	: DeflateFile(fd_, fd_offset_, fd_nbytes_),
+	  DeflateBlockStreaming(gzip_) { }
+
+
+DeflateDecompressFile::~DeflateDecompressFile()
+{
+	if (state != DeflateState::NONE) {
+		inflateEnd(&strm);
+	}
+}
+
+
+std::string
+DeflateDecompressFile::init()
+{
+	if (state != DeflateState::NONE) {
+		inflateEnd(&strm);
+	}
+
+	if (fd_offset != -1 && compressors::detail::lseek(fd, fd_offset, SEEK_SET) != static_cast<off_t>(fd_offset)) {
+		THROW(DeflateIOError, "IO error: lseek");
+	}
+
+	strm.zalloc = Z_NULL;
+	strm.zfree = Z_NULL;
+	strm.opaque = Z_NULL;
+	strm.avail_in = 0;
+	strm.next_in = Z_NULL;
+
+	stream = inflateInit2(&strm, 15 + (gzip ? 16 : 0));
+	if (stream < 0) {
+		if (gzip) {
+			THROW(DeflateException, zerr(stream));
+		} else {
+			stream = inflateInit2(&strm, -15);
+			if (stream < 0) {
+				THROW(DeflateException, zerr(stream));
+			}
+		}
+	}
+	state = DeflateState::INIT;
+
+	if (!cmpBuf) {
+		cmpBuf = std::make_unique<char[]>(cmpBuf_size);
+	}
+	if (!buffer) {
+		buffer = std::make_unique<char[]>(buffer_size);
+	}
+	return next();
+}
+
+
+std::string
+DeflateDecompressFile::next()
+{
+	assert(cmpBuf);
+	assert(buffer);
+
+	int inpBytes = compressors::detail::read(fd, &cmpBuf[0], DEFLATE_BLOCK_SIZE);
+	if (inpBytes <= 0) {
+		if (stream == Z_STREAM_END) {
+			state = DeflateState::END;
+			return std::string();
+		}
+		THROW(DeflateIOError, "IO error: read");
+	}
+	strm.avail_in = inpBytes;
+	strm.next_in = reinterpret_cast<Bytef*>(&cmpBuf[0]);
+
+	std::string result;
+	do {
+		strm.avail_out = DEFLATE_BLOCK_SIZE;
+		strm.next_out = reinterpret_cast<Bytef*>(&buffer[0]);
+		stream = inflate(&strm, Z_NO_FLUSH);
+		if ((stream < 0 && stream != Z_BUF_ERROR) || stream == Z_NEED_DICT) {
+			THROW(DeflateException, zerr(stream));
+		}
+		auto bytes_decompressed = DEFLATE_BLOCK_SIZE - strm.avail_out;
+		result.append(&buffer[0], bytes_decompressed);
+	} while (strm.avail_out == 0);
+
+	return result;
+}
+
+
+namespace {
+
+// One zlib inflate stream over a whole input buffer, read out in pieces. It ends where
+// DeflateDecompressData's loop does: at the stream's end, or once the input is spent.
+class Inflater {
+	static constexpr size_t step = size_t(1) << 30;   // avail_in and avail_out are 32 bits
+	z_stream strm{};
+	const char* in;
+	size_t left;
+	bool finished = false;
+
+public:
+	explicit Inflater(std::string_view src) : in(src.data()), left(src.size()) {
+		const int ret = inflateInit2(&strm, 15);
+		if (ret < 0) {
+			THROW(DeflateException, zerr(ret));
+		}
+	}
+
+	Inflater(const Inflater&) = delete;
+	Inflater& operator=(const Inflater&) = delete;
+
+	~Inflater() {
+		inflateEnd(&strm);
+	}
+
+	// True once the stream has ended or the input is spent: read() returns no more output.
+	bool done() const noexcept {
+		return finished;
+	}
+
+	// Decodes into dst[0, capacity) until it is full or done(); returns the bytes written.
+	size_t read(char* dst, size_t capacity) {
+		size_t total = 0;
+		while (total < capacity && !finished) {
+			if (strm.avail_in == 0 && left != 0) {
+				const size_t n = std::min(left, step);
+				strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in));
+				strm.avail_in = static_cast<uInt>(n);
+				in += n;
+				left -= n;
+			}
+			const size_t room = std::min(capacity - total, step);
+			strm.next_out = reinterpret_cast<Bytef*>(dst + total);
+			strm.avail_out = static_cast<uInt>(room);
+			const int ret = inflate(&strm, Z_NO_FLUSH);
+			if ((ret < 0 && ret != Z_BUF_ERROR) || ret == Z_NEED_DICT) {
+				THROW(DeflateException, zerr(ret));
+			}
+			total += room - strm.avail_out;
+			// Short of output space with nothing left to read: the stream is over, or truncated.
+			if (ret == Z_STREAM_END || (strm.avail_out != 0 && strm.avail_in == 0 && left == 0)) {
+				finished = true;
+			}
+		}
+		return total;
+	}
+};
+
+}  // namespace
+
+
+std::string
+decompress_deflate(std::string_view compressed)
+{
+	Inflater inflater(compressed);
+
+	// Most records decode to less than one block: decode into the stack and copy out exactly.
+	char head[DEFLATE_BLOCK_SIZE];
+	const size_t first = inflater.read(head, sizeof(head));
+	if (inflater.done()) {
+		return std::string(head, first);
+	}
+
+	// Longer output goes straight into the result. It starts at about the input's size, which is
+	// what stored (incompressible) blocks decode to, and doubles when it fills.
+	std::string result(std::max(compressed.size(), 2 * sizeof(head)), '\0');
+	memcpy(result.data(), head, first);
+	size_t used = first;
+	while (!inflater.done()) {
+		if (used == result.size()) {
+			result.resize(result.size() * 2);
+		}
+		used += inflater.read(result.data() + used, result.size() - used);
+	}
+	result.resize(used);
+	return result;
+}
