@@ -36,6 +36,7 @@ static std::string via_stream(std::string_view s) {
 }
 
 int main() {
+	std::printf("zstd %s (compression level %d), zlib %s (default level); ns per call, best of 15\n", ZSTD_versionString(), int(ZSTD_COMPRESS_LEVEL), zlibVersion());
 	std::mt19937_64 rng(7);
 	static const char* const words[] = {"alpha ", "beta ", "gamma ", "delta ", "the ", "quick ", "brown ", "fox ", "jumps ", "over ", "lazy ", "dog\n"};
 	for (const char* kind : {"random", "text"}) {

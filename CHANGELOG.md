@@ -3,6 +3,12 @@
 All notable changes to `compressors` are recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 2026-11-01
+
+### Added
+
+- `bench/bench_oneshot.cc` prints the zstd and zlib versions it links.
+
 ## 2026-10-31
 
 ### Fixed
