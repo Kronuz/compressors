@@ -165,6 +165,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_test(NAME compressors_lz4_oneshot COMMAND compressors_lz4_oneshot_test)
   endif()
 
+  # XXH32 against its definition on every host byte order (an emulated big-endian host included):
+  # storage persists the digest, so it must not depend on the machine.
+  add_executable(compressors_xxh32_test test/test_xxh32.cc)
+  target_link_libraries(compressors_xxh32_test PRIVATE compressors)
+  add_test(NAME compressors_xxh32 COMMAND compressors_xxh32_test)
+
   # Benchmarks (not built by default): cmake -DCOMPRESSORS_BENCH=ON. The XXH32 one compares with
   # upstream xxHash, fetched here only; the library never depends on it.
   option(COMPRESSORS_BENCH "Build the benchmarks" OFF)

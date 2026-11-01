@@ -38,14 +38,14 @@
 // Minimal, self-contained XXH32 streaming implementation.
 //
 // The LZ4 buffer-core keeps a running XXH32 digest over the bytes it sees and
-// exposes it through LZ4BlockStreaming::get_digest(). It is an auxiliary
-// checksum: it is not embedded in the compressed stream and is not needed for a
-// round-trip (decompress(compress(x)) == x holds without it). Xapiand pulled in
-// the full xxHash distribution; here we vendor only the XXH32 reset/update/digest
-// surface the compressor calls, implementing the canonical XXH32 algorithm so
-// the digest values match upstream xxHash. This avoids adding a fourth
-// third-party dependency for a non-load-bearing checksum.
+// exposes it through LZ4BlockStreaming::get_digest(), and storage persists XXH32
+// checksums of its records. Xapiand pulled in the full xxHash distribution; here
+// we vendor only the XXH32 reset/update/digest surface, implementing the canonical
+// XXH32 algorithm so the digest of a byte sequence is the one upstream xxHash
+// computes, on every host byte order. This avoids adding a fourth third-party
+// dependency.
 
+#include <bit>         // for std::endian
 #include <cstddef>     // for size_t
 #include <cstdint>     // for uint32_t
 #include <cstring>     // for memcpy
@@ -63,23 +63,50 @@ inline uint32_t rotl32(uint32_t x, int r) noexcept {
 	return (x << r) | (x >> (32 - r));
 }
 
+constexpr uint32_t bswap32(uint32_t x) noexcept {
+	return (x >> 24) | ((x >> 8) & 0x0000FF00U) | ((x << 8) & 0x00FF0000U) | (x << 24);
+}
+
+// How a host loads four bytes as one integer. The kernel reads through one of these, so the
+// big-endian path runs, and is tested, on any host: EmulatedBigEndianHost loads the way a
+// big-endian machine does, and read32_le swaps that back to the little-endian value XXH32 defines.
+struct NativeHost {
+	static constexpr bool big_endian = std::endian::native == std::endian::big;
+	static uint32_t load32(const void* p) noexcept {
+		uint32_t v;
+		memcpy(&v, p, sizeof(v));
+		return v;
+	}
+};
+
+struct EmulatedBigEndianHost {
+	static constexpr bool big_endian = true;
+	static uint32_t load32(const void* p) noexcept {
+		const auto* b = static_cast<const uint8_t*>(p);
+		return uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | uint32_t(b[3]);
+	}
+};
+
+// The four bytes at p as a little-endian integer, on a host that loads them as Host does.
+template <class Host>
 inline uint32_t read32_le(const void* p) noexcept {
-	uint32_t v;
-	memcpy(&v, p, sizeof(v));
-	// The canonical algorithm reads little-endian; assume LE hosts (the only
-	// platforms this library targets). On a BE host the digest would differ
-	// from upstream, but it is never compared across hosts here.
-	return v;
+	const uint32_t v = Host::load32(p);
+	if constexpr (Host::big_endian) {
+		return bswap32(v);
+	} else {
+		return v;
+	}
 }
 
 inline uint32_t round(uint32_t acc, uint32_t input) noexcept {
 	acc += input * PRIME32_2;
 	acc = rotl32(acc, 13);
 	acc *= PRIME32_1;
-#if defined(__aarch64__) && (defined(__clang__) || defined(__GNUC__))
-	// Keeps the four lanes in scalar registers. Left alone, the compiler packs them into
-	// one NEON vector, whose multiply has a longer latency than the scalar one, and the
-	// dependency chain through each lane (not the throughput) then sets the speed: 2x slower.
+#if (defined(__aarch64__) || defined(__SSE2__)) && (defined(__clang__) || defined(__GNUC__))
+	// Keeps the four lanes in scalar registers, as upstream xxHash does on these targets. Left
+	// alone, the compiler packs them into one vector (NEON, SSE2 and later), whose multiply has
+	// a longer latency than the scalar one, and the dependency chain through each lane (not the
+	// throughput) then sets the speed: 1.4-2.1x slower on x86, 2x on AArch64.
 	__asm__("" : "+r"(acc));
 #endif
 	return acc;
@@ -118,8 +145,12 @@ inline int XXH32_reset(XXH32_state_t* state, uint32_t seed) noexcept {
 }
 
 
-inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noexcept {
-	using compressors_xxhash_detail::read32_le, compressors_xxhash_detail::round;
+// The kernels, for a host that loads four bytes as Host does (NativeHost is the machine's own).
+// XXH32_update and XXH32_digest below are these on the native host; the tests run them on an
+// emulated big-endian one.
+template <class Host>
+inline int XXH32_update_as(XXH32_state_t* state, const void* input, size_t len) noexcept {
+	using compressors_xxhash_detail::round;
 	if (input == nullptr) {
 		return 0;
 	}
@@ -142,10 +173,10 @@ inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noe
 	if (state->memsize != 0) {
 		memcpy(reinterpret_cast<uint8_t*>(state->mem32) + state->memsize, input, 16 - state->memsize);
 		const uint32_t* m = state->mem32;
-		state->v1 = round(state->v1, read32_le(m + 0));
-		state->v2 = round(state->v2, read32_le(m + 1));
-		state->v3 = round(state->v3, read32_le(m + 2));
-		state->v4 = round(state->v4, read32_le(m + 3));
+		state->v1 = round(state->v1, compressors_xxhash_detail::read32_le<Host>(m + 0));
+		state->v2 = round(state->v2, compressors_xxhash_detail::read32_le<Host>(m + 1));
+		state->v3 = round(state->v3, compressors_xxhash_detail::read32_le<Host>(m + 2));
+		state->v4 = round(state->v4, compressors_xxhash_detail::read32_le<Host>(m + 3));
 		p += 16 - state->memsize;
 		state->memsize = 0;
 	}
@@ -157,10 +188,10 @@ inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noe
 		uint32_t v3 = state->v3;
 		uint32_t v4 = state->v4;
 		do {
-			v1 = round(v1, read32_le(p)); p += 4;
-			v2 = round(v2, read32_le(p)); p += 4;
-			v3 = round(v3, read32_le(p)); p += 4;
-			v4 = round(v4, read32_le(p)); p += 4;
+			v1 = round(v1, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+			v2 = round(v2, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+			v3 = round(v3, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+			v4 = round(v4, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
 		} while (p <= limit);
 		state->v1 = v1;
 		state->v2 = v2;
@@ -177,10 +208,10 @@ inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noe
 }
 
 
-inline uint32_t XXH32_digest(const XXH32_state_t* state) noexcept {
+template <class Host>
+inline uint32_t XXH32_digest_as(const XXH32_state_t* state) noexcept {
 	using compressors_xxhash_detail::PRIME32_1, compressors_xxhash_detail::PRIME32_2, compressors_xxhash_detail::PRIME32_3,
-		compressors_xxhash_detail::PRIME32_4, compressors_xxhash_detail::PRIME32_5, compressors_xxhash_detail::rotl32,
-		compressors_xxhash_detail::read32_le;
+		compressors_xxhash_detail::PRIME32_4, compressors_xxhash_detail::PRIME32_5, compressors_xxhash_detail::rotl32;
 	uint32_t h32;
 
 	if (state->large_len) {
@@ -195,7 +226,7 @@ inline uint32_t XXH32_digest(const XXH32_state_t* state) noexcept {
 	const uint8_t* const bEnd = p + state->memsize;
 
 	while (p + 4 <= bEnd) {
-		h32 += read32_le(p) * PRIME32_3;
+		h32 += compressors_xxhash_detail::read32_le<Host>(p) * PRIME32_3;
 		h32 = rotl32(h32, 17) * PRIME32_4;
 		p += 4;
 	}
@@ -211,6 +242,17 @@ inline uint32_t XXH32_digest(const XXH32_state_t* state) noexcept {
 	h32 *= PRIME32_3;
 	h32 ^= h32 >> 16;
 	return h32;
+}
+
+
+// XXH32 as upstream xxHash defines it, on every host: the same digest for the same bytes.
+inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noexcept {
+	return XXH32_update_as<compressors_xxhash_detail::NativeHost>(state, input, len);
+}
+
+
+inline uint32_t XXH32_digest(const XXH32_state_t* state) noexcept {
+	return XXH32_digest_as<compressors_xxhash_detail::NativeHost>(state);
 }
 
 }  // namespace compressors
