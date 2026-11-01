@@ -34,10 +34,10 @@ jobs:
           $R -I. bench/bench_oneshot.cc compressor_zstd.cc compressor_deflate.cc $LIB -lzstd -lz -o oneshot
       - name: Assembly identity of XXH32 (old header against new)
         run: |
-          printf '%s\n' '#include "xxh32_stream.h"' 'extern "C" int upd(compressors::XXH32_state_t* s, const void* p, size_t n) { return compressors::XXH32_update(s, p, n); }' 'extern "C" unsigned dig(const compressors::XXH32_state_t* s) { return compressors::XXH32_digest(s); }' 'extern "C" void rst(compressors::XXH32_state_t* s, unsigned seed) { compressors::XXH32_reset(s, seed); }' > probe.cc
+          mkdir -p probe; printf '%s\n' '#include "xxh32_stream.h"' 'extern "C" int upd(compressors::XXH32_state_t* s, const void* p, size_t n) { return compressors::XXH32_update(s, p, n); }' 'extern "C" unsigned dig(const compressors::XXH32_state_t* s) { return compressors::XXH32_digest(s); }' 'extern "C" void rst(compressors::XXH32_state_t* s, unsigned seed) { compressors::XXH32_reset(s, seed); }' > probe/probe.cc
           if [ "$(uname)" = Darwin ]; then CXX=clang++; else CXX=c++; fi
-          $CXX -std=c++20 -O3 -DNDEBUG -S -Ibase probe.cc -o probe_old.s
-          $CXX -std=c++20 -O3 -DNDEBUG -S -I. probe.cc -o probe_new.s
+          $CXX -std=c++20 -O3 -DNDEBUG -S -Ibase probe/probe.cc -o probe_old.s
+          $CXX -std=c++20 -O3 -DNDEBUG -S -I. probe/probe.cc -o probe_new.s
           grep -v -E '^\s*(\.(file|ident|loc|cfi_|section|build_version|p2align|globl|type|size|text|addrsig|subsections_via_symbols)|#|//)' probe_old.s | sed 's/[[:space:]]\+/ /g' > a.txt
           grep -v -E '^\s*(\.(file|ident|loc|cfi_|section|build_version|p2align|globl|type|size|text|addrsig|subsections_via_symbols)|#|//)' probe_new.s | sed 's/[[:space:]]\+/ /g' > b.txt
           wc -l a.txt b.txt
