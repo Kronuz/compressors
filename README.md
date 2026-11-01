@@ -102,16 +102,19 @@ each compressed output equals the codec's byte for byte and that every decoder r
 
 | Call | M4 Pro: library | M4 Pro: codec | i9-9980HK: library | i9-9980HK: codec |
 |---|---:|---:|---:|---:|
-| `compress_zstd`, 256 B | 621 | 695 | 1,901 | 2,043 |
-| `compress_zstd`, 64 KB | 8,833 | 9,458 | 20,530 | 24,709 |
-| `decompress_zstd`, 256 B | 51 | 91 | 228 | 240 |
-| `decompress_deflate`, 256 B | 108 | 54 | 269 | 131 |
-| `decompress_deflate`, 1 MB | 75,500 | 68,625 | 102,797 | 84,366 |
+| `compress_zstd`, 256 B | 603 | 690 | 1,880 | 1,849 |
+| `compress_zstd`, 64 KB | 8,833 | 9,750 | 20,589 | 24,776 |
+| `decompress_zstd`, 256 B | 51 | 95 | 188 | 206 |
+| `decompress_deflate`, 256 B | 110 | 55 | 259 | 129 |
+| `decompress_deflate`, 1 MB | 72,000 | 66,333 | 108,302 | 89,891 |
 
 An Apple M4 Pro (macOS 26, arm64) and an Intel Core i9-9980HK (macOS 15, x86-64). The XXH32 that
-checks LZ4 streams is the library's own; against [xxHash](https://github.com/Cyan4973/xxHash)
-0.8.3 it takes 124 µs per MiB against 121 on the i9-9980HK (`compressors_bench_xxh32`, which also
-checks that the digests agree).
+checks LZ4 streams is the library's own; `compressors_bench_xxh32` times it against
+[xxHash](https://github.com/Cyan4973/xxHash) 0.8.3 and checks that the digests agree.
+
+The zstd calls are within 2% of the codec's call or faster (the decoder of a 256-byte frame is
+0.5x on the M4 Pro). `decompress_deflate` takes 2.0x the time of zlib's `uncompress` on 256 bytes
+and 1.1x to 1.2x on 1 MB.
 
 ```sh
 cmake -S . -B build -DCOMPRESSORS_BENCH=ON -DCMAKE_BUILD_TYPE=Release
