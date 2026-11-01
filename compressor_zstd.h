@@ -251,10 +251,16 @@ public:
 };
 
 
-// One-shot frame at the default level, the bytes ZSTD_compress writes. Runs on this thread's
-// reused compression context (the same one compress_zstd_into uses) and returns a string of
-// exactly the frame's size.
-std::string compress_zstd(std::string_view uncompressed);
+inline std::string
+compress_zstd(std::string_view uncompressed)
+{
+	std::string compressed;
+	ZstdCompressData compressor(uncompressed.data(), uncompressed.size());
+	for (auto it = compressor.begin(); it; ++it) {
+		compressed.append(*it);
+	}
+	return compressed;
+}
 
 
 // Decompresses one frame whose recorded content size is at most max_size; anything else
@@ -262,9 +268,16 @@ std::string compress_zstd(std::string_view uncompressed);
 std::string decompress_zstd(std::string_view compressed, std::size_t max_size);
 
 
-// Decompresses one frame by its recorded content size, which is not bounded: use the overload
-// above for input that may be hostile. The same results and exceptions as ZstdDecompressData.
-std::string decompress_zstd(std::string_view compressed);
+inline std::string
+decompress_zstd(std::string_view compressed)
+{
+	std::string decompressed;
+	ZstdDecompressData decompressor(compressed.data(), compressed.size());
+	for (auto it = decompressor.begin(); it; ++it) {
+		decompressed.append(*it);
+	}
+	return decompressed;
+}
 
 
 // One-shot zstd frames into the caller's buffer, with this thread's reused compression and

@@ -23,7 +23,6 @@
 
 #include "compressor_deflate.h"
 
-#include <algorithm>             // for min, max
 #include <cassert>               // for assert
 
 
@@ -427,95 +426,5 @@ DeflateDecompressFile::next()
 		result.append(&buffer[0], bytes_decompressed);
 	} while (strm.avail_out == 0);
 
-	return result;
-}
-
-
-namespace {
-
-// One zlib inflate stream over a whole input buffer, read out in pieces. It ends where
-// DeflateDecompressData's loop does: at the stream's end, or once the input is spent.
-class Inflater {
-	static constexpr size_t step = size_t(1) << 30;   // avail_in and avail_out are 32 bits
-	z_stream strm{};
-	const char* in;
-	size_t left;
-	bool finished = false;
-
-public:
-	explicit Inflater(std::string_view src) : in(src.data()), left(src.size()) {
-		const int ret = inflateInit2(&strm, 15);
-		if (ret < 0) {
-			THROW(DeflateException, zerr(ret));
-		}
-	}
-
-	Inflater(const Inflater&) = delete;
-	Inflater& operator=(const Inflater&) = delete;
-
-	~Inflater() {
-		inflateEnd(&strm);
-	}
-
-	// True once the stream has ended or the input is spent: read() returns no more output.
-	bool done() const noexcept {
-		return finished;
-	}
-
-	// Decodes into dst[0, capacity) until it is full or done(); returns the bytes written.
-	size_t read(char* dst, size_t capacity) {
-		size_t total = 0;
-		while (total < capacity && !finished) {
-			if (strm.avail_in == 0 && left != 0) {
-				const size_t n = std::min(left, step);
-				strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in));
-				strm.avail_in = static_cast<uInt>(n);
-				in += n;
-				left -= n;
-			}
-			const size_t room = std::min(capacity - total, step);
-			strm.next_out = reinterpret_cast<Bytef*>(dst + total);
-			strm.avail_out = static_cast<uInt>(room);
-			const int ret = inflate(&strm, Z_NO_FLUSH);
-			if ((ret < 0 && ret != Z_BUF_ERROR) || ret == Z_NEED_DICT) {
-				THROW(DeflateException, zerr(ret));
-			}
-			total += room - strm.avail_out;
-			// Short of output space with nothing left to read: the stream is over, or truncated.
-			if (ret == Z_STREAM_END || (strm.avail_out != 0 && strm.avail_in == 0 && left == 0)) {
-				finished = true;
-			}
-		}
-		return total;
-	}
-};
-
-}  // namespace
-
-
-std::string
-decompress_deflate(std::string_view compressed)
-{
-	Inflater inflater(compressed);
-
-	// Most records decode to less than one block: decode into the stack and copy out exactly.
-	char head[DEFLATE_BLOCK_SIZE];
-	const size_t first = inflater.read(head, sizeof(head));
-	if (inflater.done()) {
-		return std::string(head, first);
-	}
-
-	// Longer output goes straight into the result. It starts at about the input's size, which is
-	// what stored (incompressible) blocks decode to, and doubles when it fills.
-	std::string result(std::max(compressed.size(), 2 * sizeof(head)), '\0');
-	memcpy(result.data(), head, first);
-	size_t used = first;
-	while (!inflater.done()) {
-		if (used == result.size()) {
-			result.resize(result.size() * 2);
-		}
-		used += inflater.read(result.data() + used, result.size() - used);
-	}
-	result.resize(used);
 	return result;
 }
