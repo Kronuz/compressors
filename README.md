@@ -91,12 +91,16 @@ Not for:
 
 ## ⚡ Performance
 
-Nanoseconds per call on random input, from `compressors_bench_oneshot` (best of 15, Apple
-clang 17, `-O3`). The comparator is the codec's own one-call API from the same zstd and zlib
-the library links (`ZSTD_compress`, `ZSTD_decompress`, zlib's `uncompress`); the benchmark
-writes its output into a reused buffer, so its rows include no allocation.
+Nanoseconds per call on random bytes, from `compressors_bench_oneshot` (best of 15 runs, Apple
+clang 17, `-O3`), against the codecs the library wraps: [zstd](https://github.com/facebook/zstd)
+1.5.7 at level 3 and [zlib](https://zlib.net) 1.2.12 (macOS's) at its default level. Each machine
+has two columns: *library* is the library's call (`compress_zstd`, `decompress_zstd`,
+`decompress_deflate`, each returning a `std::string`) and *codec* is the codec's own one-call API
+on the same bytes (`ZSTD_compress`, `ZSTD_decompress`, zlib's `uncompress`), which writes into a
+buffer the benchmark reuses and so includes no allocation. Before timing, the benchmark checks that
+each compressed output equals the codec's byte for byte and that every decoder returns its input.
 
-| Call | M4 Pro | M4 Pro, codec's call | i9-9980HK | i9-9980HK, codec's call |
+| Call | M4 Pro: library | M4 Pro: codec | i9-9980HK: library | i9-9980HK: codec |
 |---|---:|---:|---:|---:|
 | `compress_zstd`, 256 B | 621 | 695 | 1,901 | 2,043 |
 | `compress_zstd`, 64 KB | 8,833 | 9,458 | 20,530 | 24,709 |
@@ -104,14 +108,16 @@ writes its output into a reused buffer, so its rows include no allocation.
 | `decompress_deflate`, 256 B | 108 | 54 | 269 | 131 |
 | `decompress_deflate`, 1 MB | 75,500 | 68,625 | 102,797 | 84,366 |
 
-The machines are an Apple M4 Pro and an Intel Core i9-9980HK. The vendored XXH32 that checks
-LZ4 streams runs at upstream xxHash 0.8.3's speed (124 µs per MiB against 121 on the i9-9980HK,
-`compressors_bench_xxh32`).
+An Apple M4 Pro (macOS 26, arm64) and an Intel Core i9-9980HK (macOS 15, x86-64). The XXH32 that
+checks LZ4 streams is the library's own; against [xxHash](https://github.com/Cyan4973/xxHash)
+0.8.3 it takes 124 µs per MiB against 121 on the i9-9980HK (`compressors_bench_xxh32`, which also
+checks that the digests agree).
 
 ```sh
 cmake -S . -B build -DCOMPRESSORS_BENCH=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 build/compressors_bench_oneshot
+build/compressors_bench_xxh32
 ```
 
 ## 📚 Documentation
