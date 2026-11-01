@@ -19,7 +19,21 @@
 namespace {
 
 using compressors_xxhash_detail::EmulatedBigEndianHost;
+using compressors_xxhash_detail::Kernel;
 using compressors_xxhash_detail::NativeHost;
+
+// Every kernel a host can run, as a template-argument loop: the library picks one per update, the
+// tests run each of them on every input.
+template <class Host, class F>
+void for_each_kernel(F&& f) {
+	f.template operator()<Host, Kernel::automatic>();
+	f.template operator()<Host, Kernel::generic>();
+#ifdef COMPRESSORS_XXH32_NEON
+	if constexpr (!Host::big_endian) {
+		f.template operator()<Host, Kernel::neon>();
+	}
+#endif
+}
 
 // XXH32 from the specification: one shot, a plain loop, bytes assembled little-endian one at a time,
 // so no host byte order and no vectorizable lane structure.
@@ -47,20 +61,20 @@ std::uint32_t reference(const unsigned char* p, std::size_t n, std::uint32_t see
 }
 
 // The digest of data fed in pieces of the given sizes (cycled), through the kernel on Host.
-template <class Host>
+template <class Host, Kernel K = Kernel::automatic>
 std::uint32_t streamed(const unsigned char* d, std::size_t n, std::uint32_t seed, const std::vector<std::size_t>& pieces) {
 	compressors::XXH32_state_t st;
 	compressors::XXH32_reset(&st, seed);
 	std::size_t o = 0;
 	for (std::size_t k = 0; o < n; ++k) {
 		const std::size_t c = std::min(pieces[k % pieces.size()], n - o);
-		compressors::XXH32_update_as<Host>(&st, d + o, c);
+		compressors::XXH32_update_as<Host, K>(&st, d + o, c);
 		o += c;
 	}
 	return compressors::XXH32_digest_as<Host>(&st);
 }
 
-template <class Host>
+template <class Host, Kernel K>
 void check_vectors() {
 	struct Vector { const char* text; std::uint32_t seed; std::uint32_t digest; };
 	// Published values (the xxHash documentation and its sanity test): 0x02CC5D05 is XXH32 of the
@@ -76,13 +90,13 @@ void check_vectors() {
 		const std::string s = v.text;
 		const auto* d = reinterpret_cast<const unsigned char*>(s.data());
 		CHECK(reference(d, s.size(), v.seed) == v.digest);
-		CHECK(streamed<Host>(d, s.size(), v.seed, {1}) == v.digest);
-		CHECK(streamed<Host>(d, s.size(), v.seed, {1000}) == v.digest);
+		CHECK((streamed<Host, K>(d, s.size(), v.seed, {1}) == v.digest));
+		CHECK((streamed<Host, K>(d, s.size(), v.seed, {1000}) == v.digest));
 	}
 }
 
 // Every length around the 4-byte and 16-byte steps, several seeds, several ways of cutting the input.
-template <class Host>
+template <class Host, Kernel K>
 void check_lengths(std::mt19937_64& rng) {
 	std::string buf(700, '\0');
 	for (auto& c : buf) { c = static_cast<char>(rng()); }
@@ -92,13 +106,13 @@ void check_lengths(std::mt19937_64& rng) {
 		for (std::uint32_t seed : {0U, 1U, 0x9E3779B1U, 0xFFFFFFFFU}) {
 			const std::uint32_t want = reference(d, n, seed);
 			for (const auto& cut : cuts) {
-				CHECK(streamed<Host>(d, n, seed, cut) == want);
+				CHECK((streamed<Host, K>(d, n, seed, cut) == want));
 			}
 		}
 	}
 }
 
-template <class Host>
+template <class Host, Kernel K>
 void check_random(std::mt19937_64& rng) {
 	for (int i = 0; i < 400; ++i) {
 		const std::size_t n = i < 40 ? 100000 + rng() % 1000 : rng() % 20000;
@@ -109,7 +123,7 @@ void check_random(std::mt19937_64& rng) {
 		std::vector<std::size_t> cut;
 		for (int k = 0; k < 8; ++k) { cut.push_back(rng() % 3000); }
 		cut.push_back(1);
-		CHECK(streamed<Host>(d, n, seed, cut) == reference(d, n, seed));
+		CHECK((streamed<Host, K>(d, n, seed, cut) == reference(d, n, seed)));
 	}
 }
 
@@ -138,12 +152,15 @@ int main() {
 	std::mt19937_64 rng(32);
 	check_read32<NativeHost>();
 	check_read32<EmulatedBigEndianHost>();
-	check_vectors<NativeHost>();
-	check_vectors<EmulatedBigEndianHost>();
-	check_lengths<NativeHost>(rng);
-	check_lengths<EmulatedBigEndianHost>(rng);
-	check_random<NativeHost>(rng);
-	check_random<EmulatedBigEndianHost>(rng);
+	const auto all = [&]<class Host>() {
+		for_each_kernel<Host>([&]<class H, Kernel K>() {
+			check_vectors<H, K>();
+			check_lengths<H, K>(rng);
+			check_random<H, K>(rng);
+		});
+	};
+	all.template operator()<NativeHost>();
+	all.template operator()<EmulatedBigEndianHost>();
 
 	// The public entry points are the native kernel.
 	for (int i = 0; i < 200; ++i) {

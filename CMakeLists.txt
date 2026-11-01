@@ -182,9 +182,28 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   target_link_libraries(compressors_xxh32_test PRIVATE compressors)
   add_test(NAME compressors_xxh32 COMMAND compressors_xxh32_test)
 
-  # Benchmarks (not built by default): cmake -DCOMPRESSORS_BENCH=ON. The XXH32 one compares with
-  # upstream xxHash, fetched here only; the library never depends on it.
+  # Upstream xxHash, fetched here only (by commit, so a moved tag cannot change the oracle): the
+  # XXH32 differential test and the XXH32 benchmark compare with it; the library never depends on it.
+  # -DCOMPRESSORS_UPSTREAM_TESTS=OFF builds without the download and without that test.
+  option(COMPRESSORS_UPSTREAM_TESTS "Test XXH32 against upstream xxHash (downloads it)" ON)
   option(COMPRESSORS_BENCH "Build the benchmarks" OFF)
+  if(COMPRESSORS_UPSTREAM_TESTS OR COMPRESSORS_BENCH)
+    FetchContent_Declare(xxhash_upstream GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git
+      GIT_TAG e626a72bc2321cd320e953a0ccf1584cad60f363)  # v0.8.3
+    FetchContent_GetProperties(xxhash_upstream)
+    if(NOT xxhash_upstream_POPULATED)
+      FetchContent_Populate(xxhash_upstream)
+    endif()
+  endif()
+  if(COMPRESSORS_UPSTREAM_TESTS)
+    add_executable(compressors_xxh32_upstream_test test/test_xxh32_upstream.cc)
+    target_link_libraries(compressors_xxh32_upstream_test PRIVATE compressors)
+    target_include_directories(compressors_xxh32_upstream_test PRIVATE "${xxhash_upstream_SOURCE_DIR}")
+    add_test(NAME compressors_xxh32_upstream COMMAND compressors_xxh32_upstream_test)
+  endif()
+
+  # Benchmarks (not built by default): cmake -DCOMPRESSORS_BENCH=ON. The XXH32 one compares with
+  # upstream xxHash.
   if(COMPRESSORS_BENCH)
     if(COMPRESSORS_LZ4)
       add_executable(compressors_bench_lz4 bench/bench_lz4.cc)
@@ -193,11 +212,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if(COMPRESSORS_ZSTD AND COMPRESSORS_DEFLATE)
       add_executable(compressors_bench_oneshot bench/bench_oneshot.cc)
       target_link_libraries(compressors_bench_oneshot PRIVATE compressors)
-    endif()
-    FetchContent_Declare(xxhash_upstream GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git GIT_TAG v0.8.3)
-    FetchContent_GetProperties(xxhash_upstream)
-    if(NOT xxhash_upstream_POPULATED)
-      FetchContent_Populate(xxhash_upstream)
     endif()
     add_executable(compressors_bench_xxh32 bench/bench_xxh32.cc)
     target_link_libraries(compressors_bench_xxh32 PRIVATE compressors)
