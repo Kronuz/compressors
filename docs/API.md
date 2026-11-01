@@ -57,6 +57,10 @@ buffer without reallocating its scratch buffers.
 `decompress_zstd(compressed, max_size)` decompresses one frame whose recorded content
 size is at most `max_size` and throws otherwise, for input that may be corrupt or
 hostile: the one-argument form allocates whatever size the frame claims.
+`decompress_zstd(compressed, out)` decodes into a string you own, replacing its contents and
+reusing its capacity, so a reader that decodes record after record allocates nothing once `out`
+has held the largest; it throws what the returning form throws and leaves `out` unspecified
+when it does.
 
 `decompress_deflate` decodes a zlib stream. It stops at the stream's end, ignoring anything
 after it, and at the end of the input: a truncated stream returns the bytes decoded so far,

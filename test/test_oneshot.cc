@@ -216,6 +216,11 @@ static void check_zstd_valid(const std::string& in) {
 	CHECK(decompress_zstd(got) == in);
 	CHECK(decompress_zstd(got, in.size()) == in);
 	CHECK(zstd_ref_decompress(got) == zstd_decompress(got));
+	{
+		std::string out = "stale bytes that the call replaces";
+		decompress_zstd(got, out);
+		CHECK(out == in);
+	}
 	if (!in.empty()) {
 		CHECK(zstd_verdict([&] { return decompress_zstd(got, in.size() - 1); }) == zstd_verdict([&] { return zstd_old_bounded(got, in.size() - 1); }));
 		CHECK(zstd_verdict([&] { return decompress_zstd(got, in.size() - 1); }).kind == 2);
@@ -234,6 +239,20 @@ static void check_zstd_damaged(const std::string& in) {
 		if (!(ref == got)) {
 			std::fprintf(stderr, "zstd verdict differs: input %zu B, damage %d: ref kind %d '%s' %zu B, got kind %d '%s' %zu B\n", in.size(), k, ref.kind, ref.what.c_str(), ref.bytes.size(), got.kind, got.what.c_str(), got.bytes.size());
 			std::abort();
+		}
+		{
+			// Into a caller's string: the same verdict (a thrown error leaves its bytes unspecified).
+			std::string out = "stale";
+			Verdict into;
+			try {
+				decompress_zstd(bad, out);
+				into.bytes = out;
+			} catch (const ZstdCorruptVolume& e) {
+				into.kind = 2; into.what = message(e.what());
+			} catch (const ZstdException& e) {
+				into.kind = 1; into.what = message(e.what());
+			}
+			CHECK(into == ref);
 		}
 		for (std::size_t max : {std::size_t(0), in.size(), in.size() * 2 + 1, std::size_t(1) << 20}) {
 			CHECK(zstd_verdict([&] { return decompress_zstd(bad, max); }) == zstd_verdict([&] { return zstd_old_bounded(bad, max); }));
@@ -256,6 +275,10 @@ static void check_zstd_allocations() {
 			}
 			BUDGET("decompress_zstd", 1, n + 64, decompress_zstd(packed));
 			BUDGET("decompress_zstd bounded", 1, n + 64, decompress_zstd(packed, n));
+			// A reader that decodes one record after another into one string allocates nothing.
+			std::string reused;
+			reused.reserve(n + 64);
+			BUDGET("decompress_zstd into a reused string", 0, 0, [&] { decompress_zstd(packed, reused); return 0; }());
 			const std::string one = compress_zstd(in);
 			CHECK(one.capacity() <= one.size() + 64);
 		}

@@ -78,6 +78,12 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A differential test of the one-shots against the stream classes (bytes,
   decoded bytes, and verdicts on damaged input, around the 256 KB wrap) and
   against a reference XXH32.
+- `decompress_zstd(compressed, out)`: decodes into a caller's string, reusing its capacity.
+  storage reads one record after another into one string; with it a read allocates nothing
+  for the record. Without it, a 1 MB zstd record read through the returning form allocated a
+  fresh 1 MB string per record, and under glibc's default trim threshold the freed top of
+  the heap went back to the kernel and was faulted in again: storage's 1 MB zstd read ran at
+  430-450 MB/s instead of 740 (Linux x86_64 runner; 760 with trimming disabled).
 - `test/test_oneshot.cc`: the zstd and deflate one-shots against the stream classes
   (bytes, verdicts and messages on 8,400 damaged inputs per codec, thread-local
   context reuse across sizes, four threads) and an allocation budget per call (one

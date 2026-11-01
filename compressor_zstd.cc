@@ -192,6 +192,15 @@ decompress_zstd(std::string_view compressed, std::size_t max_size)
 std::string
 decompress_zstd(std::string_view compressed)
 {
+	std::string result;
+	decompress_zstd(compressed, result);
+	return result;
+}
+
+
+void
+decompress_zstd(std::string_view compressed, std::string& out)
+{
 	// The checks and the exceptions of ZstdDecompressData::init(), without the copy through the
 	// block iterator.
 	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
@@ -205,13 +214,12 @@ decompress_zstd(std::string_view compressed)
 		THROW(ZstdCorruptVolume, "zstd frame claims more content than it can hold");
 	}
 
-	std::string result(static_cast<size_t>(content_size), '\0');
-	size_t dec_size = decompress_frame(result.data(), result.size(), compressed);
+	out.resize(static_cast<size_t>(content_size));
+	size_t dec_size = decompress_frame(out.data(), out.size(), compressed);
 	if (ZSTD_isError(dec_size) != 0u) {
 		THROW(ZstdException, "ZSTD_decompress failed: {}", ZSTD_getErrorName(dec_size));
 	}
-	result.resize(dec_size);
-	return result;
+	out.resize(dec_size);
 }
 
 

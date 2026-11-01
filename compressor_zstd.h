@@ -266,6 +266,11 @@ std::string decompress_zstd(std::string_view compressed, std::size_t max_size);
 // above for input that may be hostile. The same results and exceptions as ZstdDecompressData.
 std::string decompress_zstd(std::string_view compressed);
 
+// The same into `out`, replacing its contents and reusing its capacity, so a reader that decodes
+// one record after another allocates nothing once `out` has held the largest. Throws what the
+// returning overload throws; after a throw `out` holds unspecified bytes.
+void decompress_zstd(std::string_view compressed, std::string& out);
+
 
 // One-shot zstd frames into the caller's buffer, with this thread's reused compression and
 // decompression contexts, so a steady stream of frames allocates nothing.
