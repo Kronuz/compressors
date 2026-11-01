@@ -91,6 +91,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   decoded bytes, and verdicts on damaged input, around the 256 KB wrap) and
   against a reference XXH32.
 - `decompress_zstd(compressed, out)`: decodes into a caller's string, reusing its capacity.
+  The returning overload builds its string with the constructor: growing an empty string
+  with `resize` made a 64 KB random frame take 1.96 us instead of 1.0 us on Apple M4
+  (libc++).
   storage reads one record after another into one string; with it a read allocates nothing
   for the record. Without it, a 1 MB zstd record read through the returning form allocated a
   fresh 1 MB string per record, and under glibc's default trim threshold the freed top of

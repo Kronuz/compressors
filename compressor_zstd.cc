@@ -169,6 +169,22 @@ size_t decompress_frame(char* dst, size_t dst_size, std::string_view src) {
 	return ZSTD_decompressDCtx(ctx, dst, dst_size, src.data(), src.size());
 }
 
+// The recorded content size of the frame, by the checks and with the exceptions of
+// ZstdDecompressData::init().
+size_t frame_content_size(std::string_view compressed) {
+	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
+	if (content_size == ZSTD_CONTENTSIZE_ERROR) {
+		THROW(ZstdCorruptVolume, "Data is not a valid zstd frame");
+	}
+	if (content_size == ZSTD_CONTENTSIZE_UNKNOWN) {
+		THROW(ZstdCorruptVolume, "zstd frame does not record its content size");
+	}
+	if (content_size / 32768 > compressed.size()) {
+		THROW(ZstdCorruptVolume, "zstd frame claims more content than it can hold");
+	}
+	return static_cast<size_t>(content_size);
+}
+
 }  // namespace
 
 
@@ -192,8 +208,13 @@ decompress_zstd(std::string_view compressed, std::size_t max_size)
 std::string
 decompress_zstd(std::string_view compressed)
 {
-	std::string result;
-	decompress_zstd(compressed, result);
+	const size_t content_size = frame_content_size(compressed);
+	std::string result(content_size, '\0');
+	size_t dec_size = decompress_frame(result.data(), result.size(), compressed);
+	if (ZSTD_isError(dec_size) != 0u) {
+		THROW(ZstdException, "ZSTD_decompress failed: {}", ZSTD_getErrorName(dec_size));
+	}
+	result.resize(dec_size);
 	return result;
 }
 
@@ -201,20 +222,7 @@ decompress_zstd(std::string_view compressed)
 void
 decompress_zstd(std::string_view compressed, std::string& out)
 {
-	// The checks and the exceptions of ZstdDecompressData::init(), without the copy through the
-	// block iterator.
-	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
-	if (content_size == ZSTD_CONTENTSIZE_ERROR) {
-		THROW(ZstdCorruptVolume, "Data is not a valid zstd frame");
-	}
-	if (content_size == ZSTD_CONTENTSIZE_UNKNOWN) {
-		THROW(ZstdCorruptVolume, "zstd frame does not record its content size");
-	}
-	if (content_size / 32768 > compressed.size()) {
-		THROW(ZstdCorruptVolume, "zstd frame claims more content than it can hold");
-	}
-
-	out.resize(static_cast<size_t>(content_size));
+	out.resize(frame_content_size(compressed));
 	size_t dec_size = decompress_frame(out.data(), out.size(), compressed);
 	if (ZSTD_isError(dec_size) != 0u) {
 		THROW(ZstdException, "ZSTD_decompress failed: {}", ZSTD_getErrorName(dec_size));
