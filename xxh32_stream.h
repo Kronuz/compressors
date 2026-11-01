@@ -91,11 +91,7 @@ struct EmulatedBigEndianHost {
 template <class Host>
 inline uint32_t read32_le(const void* p) noexcept {
 	const uint32_t v = Host::load32(p);
-	if constexpr (Host::big_endian) {
-		return bswap32(v);
-	} else {
-		return v;
-	}
+	return v;   // mutant: no swap on a big-endian host
 }
 
 inline uint32_t round(uint32_t acc, uint32_t input) noexcept {
