@@ -40,12 +40,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `XXH32` keeps its four lanes in scalar registers on x86 (SSE2) too, as upstream
   xxHash does. On x86 clang and g++ vectorize the lanes at every level, and the
   lane chain then sets the speed. One 1 MiB buffer fed in 2 KiB updates
-  (`compressors_bench_xxh32`, best of 25, per MiB), against upstream xxHash 0.8.3:
-  Linux x86_64, g++ 13, 501 us to 83 us (upstream 82 us); macOS x86_64, Apple
-  clang 17, 277 us to 153-171 us (139-141 us when fed in one update; upstream
-  138-141 us); both on GitHub runners. The
-  AArch64 code is instruction-identical to before and its timing is unchanged
-  (Linux arm64 g++: 110 us both; macOS arm64: 155 us both). Digests are
+  (`compressors_bench_xxh32`, best of 25, per MiB), against upstream xxHash 0.8.3: on an
+  Intel i9-9980HK (macOS), Apple clang 17 -O3 198 us to 124 us (upstream 121 us), -O3
+  -march=native 199-208 us to 130-148 us (upstream 127-137 us), g++-16 -O3 259 us to
+  124 us (upstream 121 us). On GitHub runners: Linux x86_64, g++ 13, 501 us to 83 us
+  (upstream 82 us); macOS x86_64, Apple clang 17, 277 us to 153-171 us (139-141 us when
+  fed in one update; upstream 138-141 us). The
+  AArch64 code is the same instruction for instruction (Linux arm64 g++; only function-label
+  numbers differ) and its timing is unchanged (Apple M4 Pro 87-89 us both; Linux arm64
+  g++ 110 us both; macOS arm64 runner 155 us both). Digests are
   unchanged. The LZ4 stream classes, which hash every block, are faster by the
   same factor on x86 (1 MB random compress 1.2-1.3x).
 - `compress_zstd`, `decompress_zstd` (both overloads) and `decompress_deflate` no
@@ -64,8 +67,17 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   1 MB random 100098 / 87961 / 79608; zstd decompress 256 B random 1190 / 32 / 1133,
   4 KB text 4417 / 3153 / 4279, 1 MB random 36444 / 20390 / 15994; deflate
   decompress 256 B random 240 / 116 / 106, 64 KB random 17776 / 15784 / 15022,
-  1 MB random 297503 / 251434 / 245855. On macOS x86_64 the context creation
-  costs about 13 us per call: zstd decompress of 256 B 13626 ns to 255 ns.
+  1 MB random 297503 / 251434 / 245855. On the Intel i9-9980HK (macOS, Apple clang 17,
+  -O3): zstd compress 256 B random 2115 / 1901 / 2043, 64 KB random 28987 / 20530 /
+  24709; zstd decompress 256 B random 531 / 228 / 240, 1 MB random 102530 / 62853 /
+  36612; deflate decompress 256 B random 637 / 269 / 131, 4 KB random 954 / 432 / 316,
+  1 MB random 396000 / 102797 / 84366. On Apple M4 Pro: zstd compress 256 B random
+  772 / 621 / 695, 64 KB random 12458 / 8833 / 9458; zstd decompress 256 B random 166 /
+  51 / 91; deflate decompress 256 B random 269 / 108 / 54, 1 MB random 136375 / 75500 /
+  68625. The codec's own call writes into a buffer the benchmark reuses, so the
+  decompress rows to its right include no allocation or zero-fill of a result; the
+  one-shot's gap to it is the returned string. On macOS x86_64 runners the context
+  creation costs about 13 us per call: zstd decompress of 256 B 13626 ns to 255 ns.
   `compress_deflate` is unchanged (it is zlib's `deflateInit` per call, a tie with
   `compress2`).
 - The per-thread scratch block the lz4 one-shots use (up to 1 MB) is shared with the
