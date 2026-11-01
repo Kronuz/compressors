@@ -165,6 +165,17 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     add_test(NAME compressors_lz4_oneshot COMMAND compressors_lz4_oneshot_test)
   endif()
 
+  # The one-shot zstd and deflate functions against the stream classes: identical bytes, identical
+  # verdicts on damaged input, and the allocation budget that is their point.
+  if(COMPRESSORS_ZSTD OR COMPRESSORS_DEFLATE)
+    add_executable(compressors_oneshot_test test/test_oneshot.cc)
+    target_link_libraries(compressors_oneshot_test PRIVATE compressors Threads::Threads)
+    target_compile_definitions(compressors_oneshot_test PRIVATE
+      COMPRESSORS_TEST_DEFLATE=$<BOOL:${COMPRESSORS_DEFLATE}>
+      COMPRESSORS_TEST_ZSTD=$<BOOL:${COMPRESSORS_ZSTD}>)
+    add_test(NAME compressors_oneshot COMMAND compressors_oneshot_test)
+  endif()
+
   # XXH32 against its definition on every host byte order (an emulated big-endian host included):
   # storage persists the digest, so it must not depend on the machine.
   add_executable(compressors_xxh32_test test/test_xxh32.cc)
@@ -178,6 +189,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if(COMPRESSORS_LZ4)
       add_executable(compressors_bench_lz4 bench/bench_lz4.cc)
       target_link_libraries(compressors_bench_lz4 PRIVATE compressors)
+    endif()
+    if(COMPRESSORS_ZSTD AND COMPRESSORS_DEFLATE)
+      add_executable(compressors_bench_oneshot bench/bench_oneshot.cc)
+      target_link_libraries(compressors_bench_oneshot PRIVATE compressors)
     endif()
     FetchContent_Declare(xxhash_upstream GIT_REPOSITORY https://github.com/Cyan4973/xxHash.git GIT_TAG v0.8.3)
     FetchContent_GetProperties(xxhash_upstream)

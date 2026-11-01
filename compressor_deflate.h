@@ -415,13 +415,7 @@ compress_deflate(std::string_view uncompressed)
 }
 
 
-inline std::string
-decompress_deflate(std::string_view compressed)
-{
-	std::string decompressed;
-	DeflateDecompressData decompressor(compressed.data(), compressed.size());
-	for (auto it = decompressor.begin(); it; ++it) {
-		decompressed.append(*it);
-	}
-	return decompressed;
-}
+// Decompresses a zlib stream. Ends at the stream's end (anything after it is ignored) or at the
+// end of the input, whichever comes first; a truncated stream returns what it decoded so far, as
+// DeflateDecompressData does. Damaged data throws DeflateException.
+std::string decompress_deflate(std::string_view compressed);

@@ -31,6 +31,7 @@
 #include <memory>                // for unique_ptr
 #include <new>                   // for bad_alloc
 
+#include "compressor_scratch.h"  // for compressors::detail::Scratch
 #include "likely.h"              // for likely, unlikely
 
 
@@ -458,40 +459,7 @@ constexpr size_t contiguous_capacity = wrap_size + LZ4_BLOCK_SIZE;
 // memory follows what the blocks actually decode to.
 constexpr size_t reserve_ratio = 16;
 
-// Scratch memory that is not zero-filled: a small stack buffer, else a per-thread buffer
-// kept for reuse (up to 1 MB), else a one-off heap block.
-class Scratch {
-	static constexpr size_t kept = size_t(1) << 20;
-	alignas(16) char small[4096];
-	std::unique_ptr<char[]> big;
-	struct Cache {
-		std::unique_ptr<char[]> p;
-		size_t size = 0;
-	};
-	static Cache& cache() {
-		thread_local Cache c;
-		return c;
-	}
-	char* ptr;
-
-public:
-	explicit Scratch(size_t n) {
-		if (n <= sizeof(small)) {
-			ptr = small;
-		} else if (n <= kept) {
-			auto& c = cache();
-			if (c.size < n) {
-				c.p.reset(new char[n]);
-				c.size = n;
-			}
-			ptr = c.p.get();
-		} else {
-			big.reset(new char[n]);
-			ptr = big.get();
-		}
-	}
-	char* data() noexcept { return ptr; }
-};
+using compressors::detail::Scratch;
 
 struct EncoderState {
 	LZ4_stream_t* p = LZ4_createStream();

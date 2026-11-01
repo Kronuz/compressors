@@ -25,6 +25,8 @@
 
 #include <zstd_errors.h>  // for ZSTD_getErrorCode, which older zstd.h headers leave out
 
+#include "compressor_scratch.h"  // for compressors::detail::Scratch
+
 
 /*
  * Constructor compress with data
@@ -130,26 +132,10 @@ ZstdDecompressData::next()
 }
 
 
-std::string
-decompress_zstd(std::string_view compressed, std::size_t max_size)
-{
-	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
-	if (content_size == ZSTD_CONTENTSIZE_ERROR || content_size == ZSTD_CONTENTSIZE_UNKNOWN || content_size > max_size ||
-	    content_size / 32768 > compressed.size()) {
-		THROW(ZstdCorruptVolume, "zstd frame is invalid or larger than allowed");
-	}
-	std::string result(static_cast<size_t>(content_size), '\0');
-	size_t dec_size = ZSTD_decompress(result.data(), result.size(), compressed.data(), compressed.size());
-	if (ZSTD_isError(dec_size) != 0u || dec_size != result.size()) {
-		THROW(ZstdCorruptVolume, "zstd frame is corrupt");
-	}
-	return result;
-}
-
-
 namespace {
 
-// This thread's contexts, created on first use and freed when the thread ends.
+// This thread's contexts, created on first use and freed when the thread ends. The one-shot
+// functions below reuse them, so a steady stream of calls creates none.
 struct zstd_contexts {
 	ZSTD_CCtx* c = nullptr;
 	ZSTD_DCtx* d = nullptr;
@@ -160,7 +146,95 @@ struct zstd_contexts {
 };
 thread_local zstd_contexts contexts;
 
+ZSTD_CCtx* compression_context() noexcept {
+	if (!contexts.c) {
+		contexts.c = ZSTD_createCCtx();
+	}
+	return contexts.c;
+}
+
+ZSTD_DCtx* decompression_context() noexcept {
+	if (!contexts.d) {
+		contexts.d = ZSTD_createDCtx();
+	}
+	return contexts.d;
+}
+
+// ZSTD_decompress on this thread's context: the same bytes, without creating a context per call.
+size_t decompress_frame(char* dst, size_t dst_size, std::string_view src) {
+	ZSTD_DCtx* const ctx = decompression_context();
+	if (!ctx) {
+		THROW(ZstdException, "ZSTD_createDCtx failed");
+	}
+	return ZSTD_decompressDCtx(ctx, dst, dst_size, src.data(), src.size());
+}
+
 }  // namespace
+
+
+std::string
+decompress_zstd(std::string_view compressed, std::size_t max_size)
+{
+	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
+	if (content_size == ZSTD_CONTENTSIZE_ERROR || content_size == ZSTD_CONTENTSIZE_UNKNOWN || content_size > max_size ||
+	    content_size / 32768 > compressed.size()) {
+		THROW(ZstdCorruptVolume, "zstd frame is invalid or larger than allowed");
+	}
+	std::string result(static_cast<size_t>(content_size), '\0');
+	size_t dec_size = decompress_frame(result.data(), result.size(), compressed);
+	if (ZSTD_isError(dec_size) != 0u || dec_size != result.size()) {
+		THROW(ZstdCorruptVolume, "zstd frame is corrupt");
+	}
+	return result;
+}
+
+
+std::string
+decompress_zstd(std::string_view compressed)
+{
+	// The checks and the exceptions of ZstdDecompressData::init(), without the copy through the
+	// block iterator.
+	unsigned long long const content_size = ZSTD_getFrameContentSize(compressed.data(), compressed.size());
+	if (content_size == ZSTD_CONTENTSIZE_ERROR) {
+		THROW(ZstdCorruptVolume, "Data is not a valid zstd frame");
+	}
+	if (content_size == ZSTD_CONTENTSIZE_UNKNOWN) {
+		THROW(ZstdCorruptVolume, "zstd frame does not record its content size");
+	}
+	if (content_size / 32768 > compressed.size()) {
+		THROW(ZstdCorruptVolume, "zstd frame claims more content than it can hold");
+	}
+
+	std::string result(static_cast<size_t>(content_size), '\0');
+	size_t dec_size = decompress_frame(result.data(), result.size(), compressed);
+	if (ZSTD_isError(dec_size) != 0u) {
+		THROW(ZstdException, "ZSTD_decompress failed: {}", ZSTD_getErrorName(dec_size));
+	}
+	result.resize(dec_size);
+	return result;
+}
+
+
+std::string
+compress_zstd(std::string_view uncompressed)
+{
+	// The frame goes into scratch memory and is copied out at its exact size: a string sized for
+	// the worst case would be zero-filled first and keep that capacity.
+	const size_t bound = ZSTD_compressBound(uncompressed.size());
+	if (ZSTD_isError(bound) != 0u) {
+		THROW(ZstdException, "ZSTD_compress failed: {}", ZSTD_getErrorName(bound));
+	}
+	ZSTD_CCtx* const ctx = compression_context();
+	if (!ctx) {
+		THROW(ZstdException, "ZSTD_createCCtx failed");
+	}
+	compressors::detail::Scratch out(bound);
+	const size_t n = ZSTD_compressCCtx(ctx, out.data(), bound, uncompressed.data(), uncompressed.size(), ZSTD_COMPRESS_LEVEL);
+	if (ZSTD_isError(n) != 0u) {
+		THROW(ZstdException, "ZSTD_compress failed: {}", ZSTD_getErrorName(n));
+	}
+	return std::string(out.data(), n);
+}
 
 
 std::size_t
@@ -173,10 +247,11 @@ zstd_frame_bound(std::size_t n) noexcept
 std::size_t
 compress_zstd_into(std::string_view src, char* dst, std::size_t capacity, int level)
 {
-	if (!contexts.c && !(contexts.c = ZSTD_createCCtx())) {
+	ZSTD_CCtx* const ctx = compression_context();
+	if (!ctx) {
 		THROW(ZstdException, "ZSTD_createCCtx failed");
 	}
-	const size_t n = ZSTD_compressCCtx(contexts.c, dst, capacity, src.data(), src.size(), level);
+	const size_t n = ZSTD_compressCCtx(ctx, dst, capacity, src.data(), src.size(), level);
 	if (ZSTD_isError(n) != 0u) {
 		if (ZSTD_getErrorCode(n) == ZSTD_error_dstSize_tooSmall) {
 			return 0;
@@ -190,9 +265,10 @@ compress_zstd_into(std::string_view src, char* dst, std::size_t capacity, int le
 bool
 decompress_zstd_into(std::string_view src, char* dst, std::size_t dst_size) noexcept
 {
-	if (!contexts.d && !(contexts.d = ZSTD_createDCtx())) {
+	ZSTD_DCtx* const ctx = decompression_context();
+	if (!ctx) {
 		return false;
 	}
-	const size_t n = ZSTD_decompressDCtx(contexts.d, dst, dst_size, src.data(), src.size());
+	const size_t n = ZSTD_decompressDCtx(ctx, dst, dst_size, src.data(), src.size());
 	return ZSTD_isError(n) == 0u && n == dst_size;
 }
