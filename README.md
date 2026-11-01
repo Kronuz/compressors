@@ -26,7 +26,8 @@ three different APIs.
 - **Blocks into your buffer.** `compress_lz4_block` and `compress_zstd_into` (and
   their decoders, bounded by the exact size) write one block into a buffer you own,
   with per-thread contexts: no allocation per block. `compress_zstd`,
-  `decompress_zstd` and `decompress_deflate` return their result with one allocation.
+  `decompress_zstd` and `decompress_deflate` return their result with one allocation, and
+  `decompress_zstd(compressed, out)` decodes into a string you keep from record to record.
 - **Reproducible bytes.** `COMPRESSORS_ZSTD_PINNED` and `COMPRESSORS_LZ4_PINNED`
   build pinned releases, so output is byte-identical on every platform.
 - **Finds or fetches its dependencies.** zlib from the system; LZ4 and zstd from
