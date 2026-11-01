@@ -1,0 +1,46 @@
+name: bench-tmp
+on:
+  pull_request:
+jobs:
+  bench:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-arm64, os: macos-15 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+          - { name: macos-x86_64, os: macos-15-intel }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Packages
+        run: |
+          if [ "$(uname)" = Darwin ]; then brew install zstd lz4; else sudo apt-get update -q && sudo apt-get install -y -q libzstd-dev liblz4-dev zlib1g-dev; fi
+      - name: Build
+        run: |
+          uname -a
+          git clone -q --depth 1 --branch v0.8.3 https://github.com/Cyan4973/xxHash xxHash
+          mkdir base && git archive d82b1d8 | tar -x -C base
+          if [ "$(uname)" = Darwin ]; then P=$(brew --prefix); INC="-I$P/include"; LIB="-L$P/lib"; CXX=clang++; else INC=""; LIB=""; CXX=c++; fi
+          R="$CXX -std=c++20 -O3 -DNDEBUG $INC"
+          $R -Ibase -IxxHash bench/bench_xxh32.cc -o xx_base
+          $R -I. -IxxHash bench/bench_xxh32.cc -o xx_new
+          $R -Ibase bench/bench_lz4.cc base/compressor_lz4.cc $LIB -llz4 -o lz4_base
+          $R -I. bench/bench_lz4.cc compressor_lz4.cc $LIB -llz4 -o lz4_new
+          $R -I. bench/bench_oneshot.cc compressor_zstd.cc compressor_deflate.cc $LIB -lzstd -lz -o oneshot
+      - name: Run
+        run: |
+          for r in 1 2 3; do
+            echo "== xxh32 old round $r"; ./xx_base | grep -E "n=(2048|65536|1048576) "
+            echo "== xxh32 new round $r"; ./xx_new | grep -E "n=(2048|65536|1048576) "
+          done
+          for r in 1 2; do
+            echo "== lz4 old round $r"; ./lz4_base
+            echo "== lz4 new round $r"; ./lz4_new
+          done
+          echo "== one-shot zstd and deflate (new)"; ./oneshot
+          echo "== one-shot zstd and deflate (new, second run)"; ./oneshot
