@@ -29,7 +29,15 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   independent hashes; the 47 ns of START's chunk row was a store-forwarding stall (four 4-byte
   stores of the lanes read back by one 16-byte load), which `XXH32_reset` now avoids with one
   16-byte store. The lz4 and one-shot benches show no row slower than START (104 + 48 rows,
-  15 rounds, A/A included). x86 is unchanged: the scalar kernel runs at every length there.
+  15 rounds, A/A included). x86 runs the scalar kernel at every length (Intel i9-9980HK, ns, START /
+  `6375562` / now, one update unless noted: 16 B 7.0 / 7.3 / 6.4, 256 B 42.8 / 39.8 / 32.6, 256 B in
+  2 KB chunks 65.6 / 38.8 / 40.1, 2 KB chunks 395.6 / 245.2 / 242.5, 1 MiB 195.4 us / 121.2 / 121.6;
+  hashes that wait for the one before: 16 B 13.4 / 7.3 / 6.9, 256 B 57.6 / 36.2 / 32.1). The first
+  version of this change (`430870c`) hashed 16 B on the i9 in 15-17 ns, 2.4x slower than before it:
+  with the tail copies the update grew past what clang inlines, and a call takes the lanes of a fresh
+  state out of the immediates they were folded to and through memory. The update, `XXH32_update_as`
+  and `XXH32_update` are `always_inline` on x86 now (the AArch64 code is the same instruction for
+  instruction).
   **The cost**: a hash that waits for the one before it (each call seeded by the previous digest)
   takes a block in 7 cycles, not 5: 256 B 26.2 / 26.1 / 38.0 ns, 16 B 6.1 / 6.1 / 11.1, 2 KB
   (scalar, after a vector store of the lanes) 174.8 / 173.8 / 183.1. The bench prints that

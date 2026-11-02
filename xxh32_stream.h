@@ -257,9 +257,19 @@ inline int XXH32_reset(XXH32_state_t* state, uint32_t seed) noexcept {
 
 namespace detail {
 
+// On x86 a compiler leaves the update out of line once it holds the tail copies, and the call (the
+// state through memory, no constant folding of a fresh state) takes 16 B from 7 ns to 17 on an
+// i9-9980HK; the update before the tail copies was inline there, as upstream's streaming one is.
+// The update and the functions that wrap it are forced inline on x86.
+#if defined(__x86_64__) && (defined(__clang__) || defined(__GNUC__))
+#define COMPRESSORS_XXH32_UPDATE_INLINE __attribute__((always_inline))
+#else
+#define COMPRESSORS_XXH32_UPDATE_INLINE
+#endif
+
 // The update, with the lanes run by kernel K.
 template <class Host, compressors_xxhash_detail::Kernel K>
-inline int update_with(XXH32_state_t* state, const void* input, size_t len) noexcept {
+COMPRESSORS_XXH32_UPDATE_INLINE inline int update_with(XXH32_state_t* state, const void* input, size_t len) noexcept {
 	namespace x = compressors_xxhash_detail;
 	const auto* p = static_cast<const uint8_t*>(input);
 	size_t rest = len;  // the bytes from p on
@@ -295,7 +305,7 @@ inline int update_with(XXH32_state_t* state, const void* input, size_t len) noex
 // lanes run by K. XXH32_update and XXH32_digest below are these on the native host; the tests run
 // them on an emulated big-endian one and on every kernel.
 template <class Host, compressors_xxhash_detail::Kernel K = compressors_xxhash_detail::Kernel::automatic>
-inline int XXH32_update_as(XXH32_state_t* state, const void* input, size_t len) noexcept {
+COMPRESSORS_XXH32_UPDATE_INLINE inline int XXH32_update_as(XXH32_state_t* state, const void* input, size_t len) noexcept {
 	using compressors_xxhash_detail::Kernel;
 	if (input == nullptr) {
 		return 0;
@@ -361,7 +371,7 @@ inline uint32_t XXH32_digest_as(const XXH32_state_t* state) noexcept {
 
 
 // XXH32 as upstream xxHash defines it, on every host: the same digest for the same bytes.
-inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noexcept {
+COMPRESSORS_XXH32_UPDATE_INLINE inline int XXH32_update(XXH32_state_t* state, const void* input, size_t len) noexcept {
 	return XXH32_update_as<compressors_xxhash_detail::NativeHost>(state, input, len);
 }
 
