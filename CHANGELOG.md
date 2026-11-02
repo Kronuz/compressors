@@ -16,33 +16,38 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- `XXH32` on AArch64 runs an update shorter than 1 KiB with its four lanes in one NEON
-  register and a longer one in scalar registers. `533bee4` pinned the lanes in scalar registers
-  at every length, which is what upstream xxHash does and is faster for long inputs (the lane
-  chain is 5 cycles per 16 bytes on the M4 whichever way the round is written, so 12 GB/s is the
-  ceiling of one stream), but it made 256 B hashed one after another slower than the code before
-  it (Apple M4 Pro, `compressors_bench_xxh32`, ns, START `17873b2` / `6bc4b4e` / now):
-  one update of 256 B 10.8 / 16.7 / 7.5 (upstream 16.5), 256 B in a 2 KB-chunk loop 47.5 / 17.3 /
-  7.9, 16 B 1.7 / 2.1 / 1.7, 2 KB 201.9 / 165.4 / 165.6, 64 KB 10250 / 5375 / 5500, 1 MiB
-  166833 / 86670 / 86960 (upstream 86880). The short calls are ahead of the scalar kernel because
-  four lanes in one register are a quarter of the instructions, so the processor overlaps
-  independent hashes; the 47 ns of START's chunk row was a store-forwarding stall (four 4-byte
-  stores of the lanes read back by one 16-byte load), which `XXH32_reset` now avoids with one
-  16-byte store. The lz4 and one-shot benches show no row slower than START (104 + 48 rows,
-  15 rounds, A/A included). x86 runs the scalar kernel at every length (Intel i9-9980HK, ns, START /
-  `6375562` / now, one update unless noted: 16 B 7.0 / 7.3 / 6.4, 256 B 42.8 / 39.8 / 32.6, 256 B in
-  2 KB chunks 65.6 / 38.8 / 40.1, 2 KB chunks 395.6 / 245.2 / 242.5, 1 MiB 195.4 us / 121.2 / 121.6;
-  hashes that wait for the one before: 16 B 13.4 / 7.3 / 6.9, 256 B 57.6 / 36.2 / 32.1). The first
-  version of this change (`430870c`) hashed 16 B on the i9 in 15-17 ns, 2.4x slower than before it:
-  with the tail copies the update grew past what clang inlines, and a call takes the lanes of a fresh
-  state out of the immediates they were folded to and through memory. The update, `XXH32_update_as`
-  and `XXH32_update` are `always_inline` on x86 now (the AArch64 code is the same instruction for
-  instruction).
-  **The cost**: a hash that waits for the one before it (each call seeded by the previous digest)
-  takes a block in 7 cycles, not 5: 256 B 26.2 / 26.1 / 38.0 ns, 16 B 6.1 / 6.1 / 11.1, 2 KB
-  (scalar, after a vector store of the lanes) 174.8 / 173.8 / 183.1. The bench prints that
-  pattern as `dependent`; START was as fast as the scalar kernel there. `-DCOMPRESSORS_XXH32_NEON_BELOW=0`
-  runs the scalar kernel at every length.
+- `XXH32` on AArch64 runs an update shorter than 1 KiB as `17873b2` did, with the lanes unpinned
+  and the update inlined into its caller (`COMPRESSORS_XXH32_PLAIN_BELOW`, 0 pins them at every
+  length), and a longer one with the lanes pinned in scalar registers. `533bee4` had pinned them at
+  every length, as upstream xxHash does, which is faster for long inputs (the lane chain is 5 cycles
+  per 16 bytes on the M4 whichever way the round is written, so 12 GB/s is the ceiling of one
+  stream) but made 256 B hashed one after another slower than the code before it. Where a short
+  hash follows independent ones the compiler packs the lanes into one vector, a quarter of the
+  instructions, and the processor overlaps the hashes; where the digest is used at once it keeps
+  them scalar. Apple M4 Pro, `compressors_bench_xxh32`, ns, START `17873b2` / `6375562` / now:
+  256 B one update 10.9 / 16.3 / 8.4 (upstream 16.1), 16 B 1.7 / 2.1 / 1.5, 256 B hashed after
+  the digest before it 25.2 / 25.4 / 23.3 (16 B 6.0 / 6.0 / 5.9), 256 B in a 2 KB-chunk loop
+  46.9 / 17.1 / 44.8 (the stall below), 2 KB one update 201.9 / 162.5 / 161.5, 2 KB chunks
+  314.4 / 163.3 / 163.5, 64 KB 9958 / 5375 / 5250, 1 MiB 152.0 us / 85.2 / 84.0 (upstream 85.0).
+  A build whose short update was the shared one with the unpinned loop (not this update) showed no
+  lz4 bench row slower than START (48 rows, 5 rounds, A/A included); the lz4 rows of this build were
+  not timed. x86 runs the
+  pinned kernel at every length (Intel i9-9980HK, ns, START / `6375562` / now, one update unless
+  noted: 16 B 7.0 / 7.3 / 6.4, 256 B 42.8 / 39.8 / 32.6, 256 B in 2 KB chunks 65.6 / 38.8 / 40.1,
+  2 KB chunks 395.6 / 245.2 / 242.5, 1 MiB 195.4 us / 121.2 / 121.6; hashes that wait for the
+  one before: 16 B 13.4 / 7.3 / 6.9, 256 B 57.6 / 36.2 / 32.1). The first version of this change
+  (`430870c`) put the lanes of a short update in one NEON register: 256 B one update 7.3 ns, in a
+  chunk loop 7.8, but 34-38 ns after a digest it waited for (a block takes 7 cycles of latency
+  there against 5), which START and 6375562 did in 25. It is gone; Kronuz/compressors#5. Its
+  16 B on x86 took 15-17 ns, 2.4x slower than before it: with the tail copies the update grew past
+  what clang inlines, and a call takes the lanes of a fresh state out of the immediates they were
+  folded to and through memory. The update, `XXH32_update_as` and `XXH32_update` are
+  `always_inline` on x86 and AArch64 now (the x86 assembly of the benchmarks is the same
+  instruction for instruction as at `5203edb`). What START still does is the 47 ns of 256 B in
+  a chunk loop: the compiler merges the four word stores of `XXH32_reset` with the fields next to
+  the lanes and reads the lanes back with one 16-byte load that no store covers; a 16-byte store
+  of the lanes in `XXH32_reset` removed it (7.8 ns) and made every hash that waits for its
+  digest 2x slower (256 B 46.6 ns), so `XXH32_reset` stores the words as before.
 - A tail of under 16 bytes and a carried block are copied with fixed-size copies, not a libc
   `memcpy` of unknown length: an input that is not a multiple of 16 bytes paid a call.
 - `XXH32_state_t` holds its lanes as `v[4]` (the same layout as `v1`..`v4`).
@@ -53,12 +58,13 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `COMPRESSORS_UPSTREAM_TESTS`, on by default; it fetches xxHash 0.8.3 by commit, for the test and
   the benchmark only): every length from 0 to 4096 at six seeds and five alignments, ways of
   cutting the input from 1 byte to 4 KB, random inputs up to 1 MiB, each on every kernel
-  (automatic, scalar, NEON) against upstream's one-shot and streaming digests. Eighteen mutants
-  of the header (a wrong rotate, lane, multiply, carry, tail, copy or flag) are each killed by
-  it or by `compressors_xxh32` (the flag one on Linux only); the tests also run under ASan and
-  UBSan on Linux (g++ 11, clang 12) and on an Apple M1 Pro, where the NEON kernel runs.
+  (automatic, pinned, START's update) against upstream's one-shot and streaming digests. Twenty
+  mutants of the header (a wrong rotate, lane, multiply, carry, tail, copy or flag) are each
+  killed by it or by `compressors_xxh32` (the flag one on Linux only); the tests also run under
+  ASan and UBSan on Linux (g++ 11, clang 12) and on an Apple M1 Pro.
 - `compressors_bench_xxh32` prints a `dependent` column (each call seeded by the digest of the one
-  before) for the library and upstream, and runs 5000 calls per sample up to 256 B.
+  before, so the next waits for this one) for the library and upstream, and runs 5000 calls per
+  sample up to 256 B. The gate reads it as the rows `xxh32 n=N dependent`.
 - `bench/bench_oneshot.cc` prints the zstd and zlib versions it links.
 
 ## 2026-10-31

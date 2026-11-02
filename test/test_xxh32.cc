@@ -28,11 +28,7 @@ template <class Host, class F>
 void for_each_kernel(F&& f) {
 	f.template operator()<Host, Kernel::automatic>();
 	f.template operator()<Host, Kernel::generic>();
-#ifdef COMPRESSORS_XXH32_NEON
-	if constexpr (!Host::big_endian) {
-		f.template operator()<Host, Kernel::neon>();
-	}
-#endif
+	f.template operator()<Host, Kernel::start>();
 }
 
 // XXH32 from the specification: one shot, a plain loop, bytes assembled little-endian one at a time,

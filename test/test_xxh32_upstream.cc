@@ -67,9 +67,7 @@ template <class F>
 void for_each_kernel(F&& f) {
 	f.template operator()<Kernel::automatic>();
 	f.template operator()<Kernel::generic>();
-#ifdef COMPRESSORS_XXH32_NEON
-	f.template operator()<Kernel::neon>();
-#endif
+	f.template operator()<Kernel::start>();
 }
 
 }  // namespace

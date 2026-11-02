@@ -50,16 +50,11 @@
 #include <cstdint>     // for uint32_t
 #include <cstring>     // for memcpy
 
-#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ORDER_LITTLE_ENDIAN__) && \
-	__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ && (defined(__clang__) || defined(__GNUC__))
-#include <arm_neon.h>
-#define COMPRESSORS_XXH32_NEON 1
-#endif
-
-// Updates shorter than this many bytes run the four lanes in one NEON register (AArch64); longer
-// ones in scalar registers. Define it to 0 to never use NEON.
-#ifndef COMPRESSORS_XXH32_NEON_BELOW
-#define COMPRESSORS_XXH32_NEON_BELOW 1024
+// On AArch64 an update shorter than this many bytes runs the update of 17873b2 as it was (the lanes
+// unpinned, inlined into the caller); a longer one runs them pinned in scalar registers. Define it
+// to 0 to pin them at every length.
+#ifndef COMPRESSORS_XXH32_PLAIN_BELOW
+#define COMPRESSORS_XXH32_PLAIN_BELOW 1024
 #endif
 
 
@@ -146,11 +141,11 @@ inline void pin(uint32_t& x) noexcept {
 #endif
 }
 
-// The ways to run the lanes over whole 16-byte blocks. They compute the same lanes.
+// The ways to run an update; they compute the same digest.
 enum class Kernel {
 	automatic,  // what the host runs fastest for the update's length
-	generic,    // acc = rotl(acc + input * P2, 13) * P1, one lane at a time in scalar registers
-	neon,       // the four lanes in one NEON register (AArch64 little-endian only)
+	generic,    // the lanes pinned in scalar registers: the chain through a lane sets the speed
+	start,      // the update of 17873b2: the lanes unpinned, whatever the compiler makes of them
 };
 
 // The lanes after the blocks at p, p + 16, ... up to and including limit (p <= limit).
@@ -175,44 +170,10 @@ inline const uint8_t* blocks_generic(uint32_t* v, const uint8_t* p, const uint8_
 	return p;
 }
 
-#ifdef COMPRESSORS_XXH32_NEON
-// Four lanes in one register: a quarter of the instructions of the scalar kernel, so hashes of short
-// inputs that do not wait for each other overlap in the processor and run 1.5-2.3x faster. A block
-// takes about 7 cycles of latency here against 5 in scalar registers (Apple M4 Pro), so a long input,
-// or a short one whose digest the next call waits for, runs slower: the dispatch in XXH32_update_as
-// uses this kernel only below COMPRESSORS_XXH32_NEON_BELOW bytes.
-inline uint32x4_t rotl13(uint32x4_t x) noexcept {
-	return vsriq_n_u32(vshlq_n_u32(x, 13), x, 19);
-}
-
-inline const uint8_t* blocks_neon(uint32_t* v, const uint8_t* p, const uint8_t* limit) noexcept {
-	const auto in = [](const uint8_t* q) noexcept {
-		return vmulq_n_u32(vreinterpretq_u32_u8(vld1q_u8(q)), PRIME32_2);
-	};
-	uint32x4_t s = vaddq_u32(vld1q_u32(v), in(p));
-	for (p += 16; p <= limit; p += 16) {
-		s = vmlaq_n_u32(in(p), rotl13(s), PRIME32_1);
-	}
-	vst1q_u32(v, vmulq_n_u32(rotl13(s), PRIME32_1));
-	return p;
-}
-#endif
-
-// The lanes after the blocks, run by kernel K (automatic: the scalar one; update_as picks the NEON
-// one for a short update before it gets here).
-template <class Host, Kernel K>
+// The lanes after the blocks, pinned in scalar registers.
+template <class Host>
 inline const uint8_t* blocks(uint32_t* v, const uint8_t* p, const uint8_t* limit) noexcept {
-	if constexpr (K == Kernel::neon) {
-#ifdef COMPRESSORS_XXH32_NEON
-		static_assert(!Host::big_endian, "the NEON kernel loads little-endian words directly");
-		return blocks_neon(v, p, limit);
-#else
-		static_assert(K != Kernel::neon, "the NEON kernel needs little-endian AArch64 with NEON");
-		return p;
-#endif
-	} else {
-		return blocks_generic<Host>(v, p, limit);
-	}
+	return blocks_generic<Host>(v, p, limit);
 }
 
 } // namespace compressors_xxhash_detail
@@ -238,17 +199,10 @@ inline int XXH32_reset(XXH32_state_t* state, uint32_t seed) noexcept {
 	using compressors_xxhash_detail::PRIME32_1, compressors_xxhash_detail::PRIME32_2;
 	state->total_len = 0;
 	state->large_len = 0;
-#if defined(COMPRESSORS_XXH32_NEON) && COMPRESSORS_XXH32_NEON_BELOW > 0
-	// One 16-byte store, which the NEON kernel's 16-byte load of the lanes reads whole; four word
-	// stores (or the compiler's own merge of them with the fields next to the lanes) would stall it.
-	const uint32_t init[4] = {PRIME32_1 + PRIME32_2, PRIME32_2, 0, 0U - PRIME32_1};
-	vst1q_u32(state->v, vaddq_u32(vdupq_n_u32(seed), vld1q_u32(init)));
-#else
 	state->v[0] = seed + PRIME32_1 + PRIME32_2;
 	state->v[1] = seed + PRIME32_2;
 	state->v[2] = seed + 0;
 	state->v[3] = seed - PRIME32_1;
-#endif
 	state->mem32[0] = state->mem32[1] = state->mem32[2] = state->mem32[3] = 0;
 	state->memsize = 0;
 	return 0;
@@ -261,15 +215,15 @@ namespace detail {
 // state through memory, no constant folding of a fresh state) takes 16 B from 7 ns to 17 on an
 // i9-9980HK; the update before the tail copies was inline there, as upstream's streaming one is.
 // The update and the functions that wrap it are forced inline on x86.
-#if defined(__x86_64__) && (defined(__clang__) || defined(__GNUC__))
+#if (defined(__x86_64__) || defined(__aarch64__)) && (defined(__clang__) || defined(__GNUC__))
 #define COMPRESSORS_XXH32_UPDATE_INLINE __attribute__((always_inline))
 #else
 #define COMPRESSORS_XXH32_UPDATE_INLINE
 #endif
 
-// The update, with the lanes run by kernel K.
-template <class Host, compressors_xxhash_detail::Kernel K>
-COMPRESSORS_XXH32_UPDATE_INLINE inline int update_with(XXH32_state_t* state, const void* input, size_t len) noexcept {
+// The update with the lanes pinned.
+template <class Host>
+COMPRESSORS_XXH32_UPDATE_INLINE inline int update_pinned(XXH32_state_t* state, const void* input, size_t len) noexcept {
 	namespace x = compressors_xxhash_detail;
 	const auto* p = static_cast<const uint8_t*>(input);
 	size_t rest = len;  // the bytes from p on
@@ -279,14 +233,14 @@ COMPRESSORS_XXH32_UPDATE_INLINE inline int update_with(XXH32_state_t* state, con
 		const size_t take = 16 - state->memsize;
 		x::copy_small(reinterpret_cast<uint8_t*>(state->mem32) + state->memsize, p, take);
 		const auto* m = reinterpret_cast<const uint8_t*>(state->mem32);
-		x::blocks<Host, K>(state->v, m, m);
+		x::blocks<Host>(state->v, m, m);
 		p += take;
 		rest -= take;
 		state->memsize = 0;
 	}
 
 	if (rest >= 16) {
-		p = x::blocks<Host, K>(state->v, p, p + (rest - 16));  // up to the last whole block
+		p = x::blocks<Host>(state->v, p, p + (rest - 16));  // up to the last whole block
 		rest = static_cast<size_t>(len - static_cast<size_t>(p - static_cast<const uint8_t*>(input)));
 	}
 
@@ -295,6 +249,45 @@ COMPRESSORS_XXH32_UPDATE_INLINE inline int update_with(XXH32_state_t* state, con
 		state->memsize = static_cast<uint32_t>(rest);
 	}
 
+	return 0;
+}
+
+// The update of 17873b2, with its libc memcpy calls and the plain round: on AArch64 a short update inlined into
+// its caller gets the code that was measured then, whatever the compiler makes of the lanes in that context.
+template <class Host>
+COMPRESSORS_XXH32_UPDATE_INLINE inline int update_start(XXH32_state_t* state, const void* input, size_t len) noexcept {
+	using compressors_xxhash_detail::PRIME32_1, compressors_xxhash_detail::PRIME32_2, compressors_xxhash_detail::rotl32;
+	const auto round = [](uint32_t acc, uint32_t in) noexcept { acc += in * PRIME32_2; acc = rotl32(acc, 13); return acc * PRIME32_1; };
+	const auto* p = static_cast<const uint8_t*>(input);
+	size_t rest = len;
+	if (state->memsize != 0) {
+		const size_t take = 16 - state->memsize;
+		memcpy(reinterpret_cast<uint8_t*>(state->mem32) + state->memsize, input, take);
+		const auto* m = reinterpret_cast<const uint8_t*>(state->mem32);
+		state->v[0] = round(state->v[0], compressors_xxhash_detail::read32_le<Host>(m));
+		state->v[1] = round(state->v[1], compressors_xxhash_detail::read32_le<Host>(m + 4));
+		state->v[2] = round(state->v[2], compressors_xxhash_detail::read32_le<Host>(m + 8));
+		state->v[3] = round(state->v[3], compressors_xxhash_detail::read32_le<Host>(m + 12));
+		p += take;
+		rest -= take;
+		state->memsize = 0;
+	}
+	if (rest >= 16) {
+		const uint8_t* const limit = p + (rest - 16);
+		uint32_t v1 = state->v[0], v2 = state->v[1], v3 = state->v[2], v4 = state->v[3];
+		do {
+			v1 = round(v1, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+			v2 = round(v2, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+			v3 = round(v3, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+			v4 = round(v4, compressors_xxhash_detail::read32_le<Host>(p)); p += 4;
+		} while (p <= limit);
+		state->v[0] = v1; state->v[1] = v2; state->v[2] = v3; state->v[3] = v4;
+		rest = len - static_cast<size_t>(p - static_cast<const uint8_t*>(input));
+	}
+	if (rest != 0) {
+		memcpy(state->mem32, p, rest);
+		state->memsize = static_cast<uint32_t>(rest);
+	}
 	return 0;
 }
 
@@ -322,15 +315,21 @@ COMPRESSORS_XXH32_UPDATE_INLINE inline int XXH32_update_as(XXH32_state_t* state,
 		return 0;
 	}
 
-#ifdef COMPRESSORS_XXH32_NEON
-	if constexpr (K == Kernel::automatic && !Host::big_endian) {
-		if (len < COMPRESSORS_XXH32_NEON_BELOW) {
-			return detail::update_with<Host, Kernel::neon>(state, input, len);
+#if defined(__aarch64__) && (defined(__clang__) || defined(__GNUC__))
+	if constexpr (K == Kernel::automatic) {
+		if (len < COMPRESSORS_XXH32_PLAIN_BELOW) {
+			return detail::update_start<Host>(state, input, len);
 		}
 	}
 #endif
-	return detail::update_with<Host, K>(state, input, len);
+	if constexpr (K == Kernel::start) {
+		return detail::update_start<Host>(state, input, len);
+	} else {
+		return detail::update_pinned<Host>(state, input, len);
+	}
 }
+
+
 
 
 template <class Host>
