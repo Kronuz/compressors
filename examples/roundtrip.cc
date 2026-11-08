@@ -167,6 +167,7 @@ check_round_trip(Codec codec, const char* label, const std::string& original)
 	std::string one_shot = compress_one_shot(codec, original);
 	std::string one_shot_restored = decompress_one_shot(codec, one_shot);
 	CHECK(one_shot_restored == original);
+	if (codec == Codec::deflate) CHECK(decompress_deflate(one_shot, original.size()) == original);
 
 	std::string streamed = compress_streaming(codec, original);
 	std::string streamed_restored = decompress_streaming(codec, streamed);

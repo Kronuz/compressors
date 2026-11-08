@@ -61,6 +61,12 @@ hostile: the one-argument form allocates whatever size the frame claims.
 The CMake options `COMPRESSORS_DEFLATE`, `COMPRESSORS_LZ4`, and `COMPRESSORS_ZSTD`
 (all `ON`) leave a backend and its dependency out of the build.
 
+`decompress_deflate(bytes, maximum_output, gzip=false)` bounds cumulative decoded bytes before allocating each returned block. Pass `true` for gzip. `DeflateDecompressData(data, size, gzip, maximum_output)` exposes the same bound for iteration. `reset(data, size, gzip)` preserves that bound; its four-argument overload replaces it explicitly. Existing constructors retain an unlimited output default and use the same decoder. Its blocks contain at most `DEFLATE_BLOCK_SIZE` bytes (16 KiB).
+
+The decoder requires complete checksummed streams. It rejects truncation, invalid checksums and trailing nonmember data. Gzip accepts concatenated members under one cumulative output bound, as specified by [RFC 1952, section 2.2](https://www.rfc-editor.org/rfc/rfc1952#section-2.2); zlib mode accepts one stream. The decoder retains a fixed output block and uses zlib's fixed 15-bit window, independently of the total decoded length. The caller still owns the encoded input, and a buffered result retains up to `maximum_output` decoded bytes.
+
+Adding the optional bound changes `DeflateDecompressData` layout and its constructor symbol. Rebuild C++ dependents together. Source calls and compressed output remain compatible. Truncated data and silently ignored trailing data now fail explicitly; iterator block boundaries may differ. The file decoder is unchanged.
+
 ## Dependencies and build options
 
 ### How the third-party libraries are found
