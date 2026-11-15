@@ -125,6 +125,8 @@ build/compressors_bench_xxh32
 
 ## 📚 Documentation
 
+- [Interchangeable Parts](https://kronuz.github.io/blog/compressors/):
+  the Familiars post on why it exists and how it works.
 - [docs/API.md](docs/API.md): the three backends and their formats, the interface, the
   block calls, how dependencies are found, and the build options.
 - [ARCHITECTURE.md](ARCHITECTURE.md): the CRTP block-streaming bases, the one-shots, and the
