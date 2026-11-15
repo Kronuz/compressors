@@ -14,7 +14,7 @@ compressor_zstd.h / .cc       Zstd (the new backend): CRTP base + Zstd{Data,Comp
 compressor_scratch.h          Internal: Scratch, the not-zero-filled stack / per-thread / heap memory the one-shots use.
 compressor_io.h               The library's own EINTR-safe open/close/read/lseek helpers (compressors::detail), so the *File classes don't need Xapiand's io.hh.
 exception.h                   Vendored, trimmed: header-only Error + THROW (std::format). Replaces Xapiand's located-exception wrapper.
-likely.h                      Vendored verbatim from threadpool: self-contained likely()/unlikely().
+likely.h                      Vendored verbatim from workpool: self-contained likely()/unlikely().
 xxh32_stream.h                Vendored, minimal: XXH32 streaming for lz4's get_digest() and storage's checksums, namespaced off the global xxhash API; the digest is the same on every host byte order. BSD-2-Clause.
 test/test.cc                  Round-trip test across all three backends (buffer), plus an on-disk *File round trip for deflate/lz4. CTest test `compressors`.
 test/test_lz4_oneshot.cc      compress/decompress_lz4 against the stream classes. CTest `compressors_lz4_oneshot`.

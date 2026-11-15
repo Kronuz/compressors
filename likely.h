@@ -29,7 +29,7 @@
 //
 // The standalone build does not depend on Xapiand's generated HAVE___BUILTIN_EXPECT;
 // __has_builtin (and the GCC/Clang version check) detect it directly. Vendored
-// verbatim from the threadpool extraction (github.com/Kronuz/threadpool), only
+// verbatim from the workpool extraction (github.com/Kronuz/workpool), only
 // the macro guard prefix is renamed.
 
 #if defined(__has_builtin)

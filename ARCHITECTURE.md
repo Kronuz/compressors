@@ -153,7 +153,7 @@ license/attribution:
   the Xapiand call sites expect, using `std::format` for interpolation. No
   external dependency, same call-site spelling.
 - **`likely.h`** — the `likely()` / `unlikely()` branch hints, verbatim from
-  threadpool's self-contained copy (it detects
+  workpool's self-contained copy (it detects
   `__builtin_expect` via `__has_builtin`, no `config.h`). Only the macro-guard
   prefix is renamed to `COMPRESSORS_*`.
 - **`xxh32_stream.h`** — a minimal, self-contained XXH32 streaming implementation
